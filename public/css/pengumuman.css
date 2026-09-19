@@ -1,0 +1,27 @@
+.peng-isi {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.75;
+}
+.peng-sasaran {
+    border: 1px solid #cbd5e1;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+.peng-sasaran legend {
+    font-weight: 700;
+    padding: 0 0.5rem;
+}
+.peng-json {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 28rem;
+    overflow: auto;
+    background: #f1f5f9;
+    padding: 1rem;
+}
+details > summary {
+    cursor: pointer;
+    padding: 0.75rem 0;
+}

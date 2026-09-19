@@ -1,0 +1,41 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('kurikulum', function (Blueprint $table): void {
+            $table->id();
+
+            $table->foreignId('program_studi_id')
+                ->constrained('program_studi')
+                ->restrictOnUpdate()
+                ->restrictOnDelete();
+
+            $table->string('kode', 40);
+            $table->string('nama', 150);
+            $table->unsignedSmallInteger('tahun_berlaku');
+
+            $table->enum('status', ['draf', 'aktif', 'arsip'])
+                ->default('draf');
+
+            $table->timestamps();
+
+            $table->unique(
+                ['program_studi_id', 'kode'],
+                'kurikulum_prodi_kode_unique'
+            );
+
+            $table->index(['status', 'tahun_berlaku']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('kurikulum');
+    }
+};

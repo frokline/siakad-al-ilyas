@@ -1,0 +1,12 @@
+@if ($paginator->hasPages())
+    <nav class="pagination" aria-label="Halaman data">
+        @if ($paginator->onFirstPage())
+        <span>Sebelumnya</span>@else<a href="{{ $paginator->previousPageUrl() }}" rel="prev">Sebelumnya</a>
+        @endif
+        <span>Halaman {{ $paginator->currentPage() }} dari {{ $paginator->lastPage() }} · {{ $paginator->total() }}
+            data</span>
+        @if ($paginator->hasMorePages())
+        <a href="{{ $paginator->nextPageUrl() }}" rel="next">Berikutnya</a>@else<span>Berikutnya</span>
+        @endif
+    </nav>
+@endif

@@ -1,0 +1,116 @@
+.kal-filter {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1rem;
+}
+.kal-filter label,
+.kal-waktu label {
+    display: block;
+    margin-bottom: 0.35rem;
+}
+.kal-filter input:not([type="checkbox"]),
+.kal-filter select,
+.kal-waktu input {
+    width: 100%;
+    box-sizing: border-box;
+}
+.kal-waktu {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+.kal-nav {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+.kal-scroll {
+    overflow-x: auto;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: #fff;
+}
+.kal-scroll:focus-visible {
+    outline: 3px solid #0e7490;
+    outline-offset: 3px;
+}
+.kal-grid {
+    width: 100%;
+    min-width: 770px;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+.kal-grid caption {
+    text-align: left;
+    padding: 1rem;
+    font-weight: 700;
+    color: #153d30;
+}
+.kal-grid th {
+    padding: 0.8rem;
+    background: #e8f2ed;
+    color: #153d30;
+    text-align: left;
+}
+.kal-grid td {
+    height: 125px;
+    vertical-align: top;
+    border: 1px solid #e2e8f0;
+    padding: 0.55rem;
+    overflow-wrap: anywhere;
+}
+.kal-grid time {
+    display: block;
+    font-weight: 700;
+    color: #334155;
+    margin-bottom: 0.35rem;
+}
+.kal-grid .kal-luar {
+    background: #f1f5f9;
+    color: #64748b;
+}
+.kal-item {
+    display: block;
+    padding: 0.4rem;
+    margin: 0.3rem 0;
+    border-left: 3px solid #16724c;
+    border-radius: 4px;
+    background: #eef8f2;
+    color: #14532d;
+    text-decoration: none;
+    line-height: 1.4;
+    font-size: 0.83rem;
+}
+.kal-item small {
+    display: block;
+    font-size: 0.75rem;
+}
+.kal-item:hover,
+.kal-item:focus-visible {
+    background: #d7f0e1;
+    text-decoration: underline;
+}
+.kal-batal {
+    border-left-color: #b91c1c;
+    background: #fef2f2;
+    color: #991b1b;
+}
+.kal-batal strong {
+    text-decoration: line-through;
+}
+.kal-teks {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.7;
+}
+@media (max-width: 600px) {
+    .kal-waktu {
+        grid-template-columns: 1fr;
+    }
+    .kal-nav {
+        justify-content: center;
+    }
+}
