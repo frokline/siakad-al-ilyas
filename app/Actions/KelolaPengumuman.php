@@ -189,7 +189,7 @@ final class KelolaPengumuman
     }
     private function akhir(?string $akhir): void
     {
-        if ($akhir !== null && CarbonImmutable::parse($akhir, 'UTC')->lessThanOrEqualTo(now('UTC'))) {
+        if ($akhir !== null && CarbonImmutable::parse($akhir, 'UTC')->lteTo(now('UTC'))) {
             $this->gagal('berakhir_lokal', 'Batas tayang harus setelah waktu sekarang.');
         }
     }

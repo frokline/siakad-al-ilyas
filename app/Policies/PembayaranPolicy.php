@@ -9,29 +9,49 @@ use App\Services\AksesPembayaran;
 
 class PembayaranPolicy
 {
-    public function __construct(private AksesPembayaran $akses) {}
-    public function viewAny(User $u): bool
+    public function __construct(
+        private AksesPembayaran $akses
+    ) {}
+
+    public function viewAny(User $user): bool
     {
-        return $this->akses->masuk($u);
+        return $this->akses->masuk($user);
     }
-    public function view(User $u, Pembayaran $p): bool
+
+    public function view(User $user, Pembayaran $pembayaran): bool
     {
-        return $this->akses->lihat($u, $p);
+        return $this->akses->lihat($user, $pembayaran);
     }
-    public function create(User $u, Tagihan $t): bool
+
+    public function create(User $user, Tagihan $tagihan): bool
     {
-        return $this->akses->ajukan($u, $t);
+        return $this->akses->ajukan($user, $tagihan);
     }
-    public function cancel(User $u, Pembayaran $p): bool
+
+    public function cancel(User $user, Pembayaran $pembayaran): bool
     {
-        return $this->akses->batal($u, $p);
+        return $this->akses->batal($user, $pembayaran);
     }
-    public function download(User $u, Pembayaran $p): bool
+
+    public function download(User $user, Pembayaran $pembayaran): bool
     {
-        return $this->akses->lihat($u, $p);
+        return $this->akses->lihat($user, $pembayaran);
     }
-    public function audit(User $u, Pembayaran $p): bool
+
+    public function audit(User $user, Pembayaran $pembayaran): bool
     {
-        return $this->akses->petugas($u);
+        return $this->akses->petugas($user);
+    }
+
+    /**
+     * Hanya Admin Keuangan aktif yang dapat memverifikasi
+     * pembayaran yang masih menunggu.
+     */
+    public function verify(
+        User $user,
+        Pembayaran $pembayaran
+    ): bool {
+        return $pembayaran->status === Pembayaran::MENUNGGU
+            && $this->akses->petugas($user);
     }
 }

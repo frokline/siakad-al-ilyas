@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Role;
 use App\Models\Tagihan;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
@@ -9,31 +10,66 @@ use Illuminate\Support\Facades\DB;
 
 final class AksesTagihan
 {
-    public function petugas(User $u): bool
+    public function petugas(User $user): bool
     {
-        return app(AksesKeuangan::class)->kelola($u);
+        return app(AksesKeuangan::class)->kelola($user);
     }
-    public function masuk(User $u): bool
+
+    public function masuk(User $user): bool
     {
-        return $this->petugas($u) || (User::query()->whereKey($u->id)->where('status', 'aktif')->exists()
-            && DB::table('mahasiswa')->where('user_id', $u->id)->exists());
+        if ($this->petugas($user)) {
+            return true;
+        }
+
+        return User::query()
+            ->whereKey($user->getAuthIdentifier())
+            ->where('status', User::STATUS_AKTIF)
+            ->whereHas(
+                'roles',
+                fn (Builder $roles): Builder => $roles->where(
+                    'roles.kode',
+                    Role::MAHASISWA
+                )
+            )
+            ->whereHas('mahasiswa')
+            ->exists();
     }
-    public function batasi(Builder $q, User $u): Builder
+
+    public function batasi(Builder $query, User $user): Builder
     {
-        if ($this->petugas($u)) {
-            return $q;
+        if ($this->petugas($user)) {
+            return $query;
         }
-        if (! $this->masuk($u)) {
-            return $q->whereRaw('1 = 0');
+
+        if (! $this->masuk($user)) {
+            return $query->whereRaw('1 = 0');
         }
-        return $q->whereIn('tagihan.mahasiswa_id', DB::table('mahasiswa')->select('id')->where('user_id', $u->id))
-            ->where(function (Builder $b): void {
-                $b->where('tagihan.status', Tagihan::TERBIT)
-                    ->orWhere(fn(Builder $c) => $c->where('tagihan.status', Tagihan::DIBATALKAN)->whereNotNull('tagihan.diterbitkan_at'));
+
+        return $query
+            ->whereIn(
+                'tagihan.mahasiswa_id',
+                DB::table('mahasiswa')
+                    ->select('id')
+                    ->where('user_id', $user->getAuthIdentifier())
+            )
+            ->where(function (Builder $tagihan): void {
+                $tagihan
+                    ->where('tagihan.status', Tagihan::TERBIT)
+                    ->orWhere(
+                        fn (Builder $dibatalkan): Builder => $dibatalkan
+                            ->where(
+                                'tagihan.status',
+                                Tagihan::DIBATALKAN
+                            )
+                            ->whereNotNull('tagihan.diterbitkan_at')
+                    );
             });
     }
-    public function lihat(User $u, Tagihan $t): bool
+
+    public function lihat(User $user, Tagihan $tagihan): bool
     {
-        return $this->batasi(Tagihan::query(), $u)->whereKey($t->id)->exists();
+        return $this->batasi(Tagihan::query(), $user)
+            ->whereKey($tagihan->getKey())
+            ->exists();
     }
 }

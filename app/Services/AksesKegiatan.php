@@ -6,51 +6,160 @@ use App\Models\Kegiatan;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 
-class AksesKegiatan
+final class AksesKegiatan
 {
-    public function __construct(private readonly AksesMateri $akademik) {}
-    public function masuk(User $u): bool
-    {
-        return $this->akademik->masuk($u);
+    public function __construct(
+        private readonly AksesMateri $akademik
+    ) {
     }
-    public function pengelola(User $u): bool
+
+    public function masuk(User $user): bool
     {
-        return $this->akademik->pengelola($u);
+        return $this->akademik->masuk($user);
     }
-    public function kelasKelola(User $u): Builder
+
+    public function pengelola(User $user): bool
     {
-        return $this->akademik->kelasKelola($u);
+        return $this->akademik->pengelola($user);
     }
-    public function kelola(User $u, int $id): bool
+
+    public function kelasKelola(User $user): Builder
     {
-        return $this->akademik->kelola($u, $id);
+        return $this->akademik->kelasKelola($user);
     }
-    public function konteksTulis(int $id): bool
-    {
-        return $this->akademik->konteksTulis($id);
+
+    public function kelola(
+        User $user,
+        int $kelasId
+    ): bool {
+        return $this->akademik->kelola(
+            $user,
+            $kelasId
+        );
     }
-    public function batasi(Builder $q, User $u): Builder
-    {
-        $kelola = $this->akademik->kelasKelola($u)->select('kelas_kuliah.id');
-        $peserta = $this->akademik->kelasPeserta($u)->select('kelas_kuliah.id');
-        return $q->where(function (Builder $b) use ($kelola, $peserta): void {
-            $b->whereIn('kegiatan.kelas_kuliah_id', $kelola)->orWhere(function (Builder $s) use ($peserta): void {
-                $s->whereIn('kegiatan.kelas_kuliah_id', $peserta)->whereIn('kegiatan.status', [Kegiatan::TERBIT, Kegiatan::DITUTUP])
-                    ->whereNotNull('kegiatan.terbit_at')->where('kegiatan.terbit_at', '<=', now('UTC'))
-                    ->where(fn(Builder $p) => $p->whereNull('kegiatan.pertemuan_id')
-                        ->orWhereHas('pertemuan', fn(Builder $r) => $r->where('status', '!=', 'batal')));
-            });
-        });
+
+    public function konteksTulis(
+        int $kelasId
+    ): bool {
+        return $this->akademik->konteksTulis(
+            $kelasId
+        );
     }
-    public function lihat(User $u, Kegiatan $k): bool
-    {
-        return $this->batasi(Kegiatan::query(), $u)->whereKey($k->id)->exists();
+
+    /**
+     * Dosen melihat seluruh pembelajaran kelas yang dikelolanya.
+     *
+     * Mahasiswa hanya melihat pembelajaran terbit atau ditutup
+     * dari kelas yang benar-benar diikutinya.
+     */
+    public function batasi(
+        Builder $query,
+        User $user
+    ): Builder {
+        $kelasKelola = $this->akademik
+            ->kelasKelola($user)
+            ->select('kelas_kuliah.id');
+
+        $kelasPeserta = $this->akademik
+            ->kelasPeserta($user)
+            ->select('kelas_kuliah.id');
+
+        return $query->where(
+            static function (Builder $pembelajaran) use (
+                $kelasKelola,
+                $kelasPeserta
+            ): void {
+                $pembelajaran
+                    ->whereIn(
+                        'kegiatan.kelas_kuliah_id',
+                        $kelasKelola
+                    )
+                    ->orWhere(
+                        static function (Builder $mahasiswa) use (
+                            $kelasPeserta
+                        ): void {
+                            $mahasiswa
+                                ->whereIn(
+                                    'kegiatan.kelas_kuliah_id',
+                                    $kelasPeserta
+                                )
+                                ->whereIn(
+                                    'kegiatan.status',
+                                    [
+                                        Kegiatan::TERBIT,
+                                        Kegiatan::DITUTUP,
+                                    ]
+                                )
+                                ->whereNotNull(
+                                    'kegiatan.terbit_at'
+                                )
+                                ->where(
+                                    'kegiatan.terbit_at',
+                                    '<=',
+                                    now('UTC')
+                                )
+                                ->where(
+                                    static function (
+                                        Builder $pertemuan
+                                    ): void {
+                                        $pertemuan
+                                            ->whereNull(
+                                                'kegiatan.pertemuan_id'
+                                            )
+                                            ->orWhereHas(
+                                                'pertemuan',
+                                                static function (
+                                                    Builder $sesi
+                                                ): void {
+                                                    $sesi->where(
+                                                        'status',
+                                                        '!=',
+                                                        'batal'
+                                                    );
+                                                }
+                                            );
+                                    }
+                                );
+                        }
+                    );
+            }
+        );
     }
-    public function bacaIsi(User $u, Kegiatan $k): bool
-    {
-        if ($this->kelola($u, $k->kelas_kuliah_id)) {
+
+    public function lihat(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $this->batasi(
+            Kegiatan::query(),
+            $user
+        )
+            ->whereKey($kegiatan->id)
+            ->exists();
+    }
+
+    /**
+     * Isi pembelajaran langsung dapat dibaca setelah dibagikan.
+     *
+     * Waktu mulai hanya membatasi kapan mahasiswa dapat
+     * mengirim jawaban, bukan membatasi pembacaan instruksi.
+     */
+    public function bacaIsi(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        if (
+            $this->kelola(
+                $user,
+                $kegiatan->kelas_kuliah_id
+            )
+        ) {
             return true;
         }
-        return $this->batasi(Kegiatan::query(), $u)->whereKey($k->id)->where('buka_at', '<=', now('UTC'))->exists();
+
+        return $this->lihat(
+            $user,
+            $kegiatan
+        ) && $kegiatan->dapatDilihat();
     }
 }

@@ -1,62 +1,185 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Middleware\EnsureRoleManagementAccess;
-use App\Http\Middleware\AuthenticatePresensi;
 
-// Import Controllers
-use App\Http\Controllers\Auth\AdminSessionController;
-use App\Http\Controllers\Auth\PresensiSessionController;
+// Middleware
+use App\Http\Middleware\AuthenticateBerkas;
+use App\Http\Middleware\AuthenticateKegiatan;
+use App\Http\Middleware\AuthenticateKeuangan;
+use App\Http\Middleware\AuthenticateMateri;
+use App\Http\Middleware\AuthenticatePengumpulan;
+use App\Http\Middleware\AuthenticatePresensi;
+use App\Http\Middleware\AuthenticateSurat;
+use App\Http\Middleware\EnsureRoleManagementAccess;
+
+// Controllers
+use App\Http\Controllers\AdminDashboardController;
+use App\Http\Controllers\Auth\PortalSessionController;
+use App\Http\Controllers\BerkasController;
 use App\Http\Controllers\DosenController;
+use App\Http\Controllers\JadwalKuliahController;
+use App\Http\Controllers\JenisBiayaController;
+use App\Http\Controllers\JenisSuratController;
+use App\Http\Controllers\KalenderAkademikController;
+use App\Http\Controllers\KegiatanController;
+use App\Http\Controllers\KelasKuliahController;
+use App\Http\Controllers\KeuanganDashboardController;
+use App\Http\Controllers\KrsController;
 use App\Http\Controllers\KurikulumController;
+use App\Http\Controllers\KurikulumMataKuliahController;
+use App\Http\Controllers\MahasiswaController;
 use App\Http\Controllers\MataKuliahController;
+use App\Http\Controllers\MateriController;
+use App\Http\Controllers\NotifikasiController;
+use App\Http\Controllers\PaketSemesterController;
+use App\Http\Controllers\PembayaranController;
+use App\Http\Controllers\PengajarKelasController;
+use App\Http\Controllers\PengumpulanController;
+use App\Http\Controllers\PengumumanController;
+use App\Http\Controllers\PermohonanSuratController;
 use App\Http\Controllers\PeriodeAkademikController;
+use App\Http\Controllers\PertemuanController;
+use App\Http\Controllers\PortalJadwalController;
+use App\Http\Controllers\PortalKelasDosenController;
+use App\Http\Controllers\PortalKrsController;
+use App\Http\Controllers\PortalMahasiswaController;
+use App\Http\Controllers\PortalPesertaKelasDosenController;
+use App\Http\Controllers\PortalPresensiMahasiswaController;
+use App\Http\Controllers\PortalProfilMahasiswaController;
+use App\Http\Controllers\PresensiController;
 use App\Http\Controllers\ProgramStudiController;
+use App\Http\Controllers\RegistrasiSemesterController;
 use App\Http\Controllers\RiwayatStudiController;
 use App\Http\Controllers\RoleController;
-use App\Http\Controllers\UserController;
-use App\Http\Controllers\PaketSemesterController;
 use App\Http\Controllers\RombelController;
-use App\Http\Controllers\MahasiswaController;
-use App\Http\Controllers\RegistrasiSemesterController;
-use App\Http\Controllers\KelasKuliahController;
-use App\Http\Controllers\KrsController;
-use App\Http\Controllers\PengajarKelasController;
-use App\Http\Controllers\JadwalKuliahController;
-use App\Http\Controllers\PertemuanController;
-use App\Http\Controllers\PresensiController;
+use App\Http\Controllers\TagihanController;
+use App\Http\Controllers\UserController;
 
-// Halaman awal
-Route::redirect('/', '/admin/roles')->name('home');
+/*
+|--------------------------------------------------------------------------
+| 1. LOGIN & LOGOUT (pintu masuk tunggal seluruh pengguna)
+|--------------------------------------------------------------------------
+*/
 
-// Login admin
-Route::controller(AdminSessionController::class)
-    ->middleware(['guest:web', 'cache.headers:no_store;private'])
+Route::controller(PortalSessionController::class)
+    ->middleware('cache.headers:no_store;private')
     ->group(function (): void {
+        Route::get('/', 'home')->name('home');
         Route::get('/login', 'create')->name('login');
-        Route::post('/login', 'store')->middleware('throttle:admin-login')->name('login.store');
+        Route::post('/login', 'store')
+            ->middleware('throttle:portal-login')
+            ->name('login.store');
     });
 
-// Logout
-Route::post('/logout', [AdminSessionController::class, 'destroy'])
+Route::post('/logout', [PortalSessionController::class, 'destroy'])
     ->middleware(['auth:web', 'auth.session', 'throttle:30,1', 'cache.headers:no_store;private'])
     ->name('logout');
 
+// Kompatibilitas alamat lama. Semua autentikasi tetap diproses oleh pintu tunggal.
+Route::middleware('cache.headers:no_store;private')->group(function (): void {
+    Route::redirect('/login/dosen', '/login')->name('presensi.login');
+    Route::post('/login/dosen', [PortalSessionController::class, 'store'])
+        ->middleware('throttle:portal-login')
+        ->name('presensi.login.store');
 
-// ==========================================================
-// GRUP UTAMA ADMIN
-// (Semua route di dalam ini otomatis memiliki URL /admin/... 
-// dan name admin....)
-// ==========================================================
+    Route::redirect('/login/berkas', '/login')->name('berkas.login');
+    Route::post('/login/berkas', [PortalSessionController::class, 'store'])
+        ->middleware('throttle:portal-login')
+        ->name('berkas.login.store');
+});
+
+/*
+|--------------------------------------------------------------------------
+| 2. PORTAL MAHASISWA & DOSEN (cukup login, tanpa pengecekan peran khusus)
+|--------------------------------------------------------------------------
+*/
+Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private'])
+    ->group(function (): void {
+
+        // Dashboard mahasiswa
+        Route::get('/portal-mahasiswa', [PortalMahasiswaController::class, 'index'])
+            ->name('portal.mahasiswa.index');
+
+        // KRS mahasiswa
+        Route::controller(PortalKrsController::class)
+            ->prefix('krs-saya')
+            ->name('portal.krs.')
+            ->where(['krs' => '[0-9]+'])
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/{krs}/cetak', 'cetak')->middleware('throttle:30,1')->name('cetak');
+                Route::get('/{krs}', 'show')->name('show');
+            });
+
+        // Jadwal kuliah mahasiswa
+        Route::controller(PortalJadwalController::class)
+            ->prefix('jadwal-saya')
+            ->name('portal.jadwal.')
+            ->where(['jadwalKuliah' => '[0-9]+'])
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/{jadwalKuliah}', 'show')->name('show');
+            });
+
+        // Presensi mahasiswa
+        Route::controller(PortalPresensiMahasiswaController::class)
+            ->prefix('presensi-saya')
+            ->name('portal.presensi.')
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/{presensi}', 'show')->whereNumber('presensi')->name('show');
+            });
+
+        // Profil mahasiswa
+        Route::controller(PortalProfilMahasiswaController::class)
+            ->prefix('profil-saya')
+            ->name('portal.profil.')
+            ->group(function (): void {
+                Route::get('/', 'show')->name('show');
+                Route::get('/edit', 'edit')->name('edit');
+                Route::patch('/', 'update')->name('update');
+            });
+
+        // Kelas & peserta kelas milik dosen
+        Route::prefix('dosen/kelas-saya')
+            ->name('portal.dosen.')
+            ->group(function (): void {
+                Route::get('/', [PortalKelasDosenController::class, 'index'])
+                    ->name('kelas.index');
+
+                Route::get('/{kelas}', [PortalKelasDosenController::class, 'show'])
+                    ->whereNumber('kelas')
+                    ->name('kelas.show');
+
+                Route::get('/{kelas}/peserta', [PortalPesertaKelasDosenController::class, 'index'])
+                    ->whereNumber('kelas')
+                    ->name('peserta.index');
+
+                Route::get('/{kelas}/peserta/{peserta}', [PortalPesertaKelasDosenController::class, 'show'])
+                    ->whereNumber('kelas')
+                    ->whereNumber('peserta')
+                    ->name('peserta.show');
+            });
+    });
+
+/*
+|--------------------------------------------------------------------------
+| 3. ADMIN AKADEMIK  (URL: /admin/...  |  nama: admin....)
+|--------------------------------------------------------------------------
+*/
 Route::prefix('admin')
     ->name('admin.')
     ->middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private'])
     ->group(function (): void {
 
+        // Dashboard  ->  /admin
+        Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
+
         // Peran
         Route::controller(RoleController::class)->prefix('roles')->name('roles.')
             ->middleware(['can:kelola-peran', EnsureRoleManagementAccess::class])
-            ->where(['role' => '[0-9]+'])->group(function (): void {
+            ->where(['role' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/{role}', 'show')->name('show');
                 Route::get('/{role}/edit', 'edit')->name('edit');
@@ -65,7 +188,9 @@ Route::prefix('admin')
 
         // Pengguna
         Route::controller(UserController::class)->prefix('users')->name('users.')
-            ->middleware('can:kelola-pengguna')->where(['user' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-pengguna')
+            ->where(['user' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{user}', 'show')->name('show');
@@ -79,7 +204,9 @@ Route::prefix('admin')
 
         // Program Studi
         Route::controller(ProgramStudiController::class)->prefix('program-studi')->name('program-studi.')
-            ->middleware('can:kelola-program-studi')->where(['programStudi' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-program-studi')
+            ->where(['programStudi' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{programStudi}', 'show')->name('show');
@@ -92,7 +219,9 @@ Route::prefix('admin')
 
         // Periode Akademik
         Route::controller(PeriodeAkademikController::class)->prefix('periode-akademik')->name('periode-akademik.')
-            ->middleware('can:kelola-periode-akademik')->where(['periodeAkademik' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-periode-akademik')
+            ->where(['periodeAkademik' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{periodeAkademik}', 'show')->name('show');
@@ -105,7 +234,9 @@ Route::prefix('admin')
 
         // Kurikulum
         Route::controller(KurikulumController::class)->prefix('kurikulum')->name('kurikulum.')
-            ->middleware('can:kelola-kurikulum')->where(['kurikulum' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-kurikulum')
+            ->where(['kurikulum' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{kurikulum}', 'show')->name('show');
@@ -116,9 +247,30 @@ Route::prefix('admin')
                 });
             });
 
+        // Susunan Mata Kuliah Kurikulum
+        Route::controller(KurikulumMataKuliahController::class)
+            ->prefix('kurikulum/{kurikulum}/mata-kuliah')
+            ->name('kurikulum.mata-kuliah.')
+            ->middleware('can:kelola-kurikulum')
+            ->where(['kurikulum' => '[0-9]+', 'detail' => '[0-9]+'])
+            ->scopeBindings()
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{detail}', 'show')->name('show');
+                Route::get('/{detail}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{detail}', 'update')->name('update');
+                    Route::delete('/{detail}', 'destroy')->name('destroy');
+                });
+            });
+
         // Mata Kuliah
         Route::controller(MataKuliahController::class)->prefix('mata-kuliah')->name('mata-kuliah.')
-            ->middleware('can:kelola-mata-kuliah')->where(['mataKuliah' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-mata-kuliah')
+            ->where(['mataKuliah' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{mataKuliah}', 'show')->name('show');
@@ -131,7 +283,9 @@ Route::prefix('admin')
 
         // Dosen
         Route::controller(DosenController::class)->prefix('dosen')->name('dosen.')
-            ->middleware('can:kelola-dosen')->where(['dosen' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-dosen')
+            ->where(['dosen' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{dosen}', 'show')->name('show');
@@ -144,7 +298,9 @@ Route::prefix('admin')
 
         // Riwayat Studi
         Route::controller(RiwayatStudiController::class)->prefix('riwayat-studi')->name('riwayat-studi.')
-            ->middleware('can:kelola-riwayat-studi')->where(['riwayatStudi' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-riwayat-studi')
+            ->where(['riwayatStudi' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{riwayatStudi}', 'show')->name('show');
@@ -157,7 +313,9 @@ Route::prefix('admin')
 
         // Mahasiswa
         Route::controller(MahasiswaController::class)->prefix('mahasiswa')->name('mahasiswa.')
-            ->middleware('can:kelola-mahasiswa')->where(['mahasiswa' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-mahasiswa')
+            ->where(['mahasiswa' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{mahasiswa}', 'show')->name('show');
@@ -168,9 +326,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Paket Semester (Diperbaiki: Dibuang kata 'admin' dari prefix & name karena sudah mewarisi grup induk)
+        // Paket Semester
         Route::controller(PaketSemesterController::class)->prefix('paket-semester')->name('paket-semester.')
-            ->middleware('can:kelola-paket-semester')->where(['paketSemester' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-paket-semester')
+            ->where(['paketSemester' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{paketSemester}', 'show')->name('show');
@@ -183,9 +343,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Rombel (Diperbaiki)
+        // Rombel
         Route::controller(RombelController::class)->prefix('rombel')->name('rombel.')
-            ->middleware('can:kelola-rombel')->where(['rombel' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-rombel')
+            ->where(['rombel' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{rombel}', 'show')->name('show');
@@ -196,9 +358,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Registrasi Semester (Diperbaiki)
+        // Registrasi Semester
         Route::controller(RegistrasiSemesterController::class)->prefix('registrasi-semester')->name('registrasi-semester.')
-            ->middleware('can:kelola-registrasi-semester')->where(['registrasiSemester' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-registrasi-semester')
+            ->where(['registrasiSemester' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{registrasiSemester}', 'show')->name('show');
@@ -209,9 +373,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Kelas Kuliah (Diperbaiki)
+        // Kelas Kuliah
         Route::controller(KelasKuliahController::class)->prefix('kelas-kuliah')->name('kelas-kuliah.')
-            ->middleware('can:kelola-kelas-kuliah')->where(['kelasKuliah' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-kelas-kuliah')
+            ->where(['kelasKuliah' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{kelasKuliah}', 'show')->name('show');
@@ -222,9 +388,11 @@ Route::prefix('admin')
                 });
             });
 
-        // KRS (Diperbaiki)
+        // KRS
         Route::controller(KrsController::class)->prefix('krs')->name('krs.')
-            ->middleware('can:kelola-krs')->where(['krs' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-krs')
+            ->where(['krs' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{krs}/cetak', 'cetak')->name('cetak');
@@ -242,9 +410,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Pengajar Kelas (Diperbaiki)
+        // Pengajar Kelas
         Route::controller(PengajarKelasController::class)->prefix('pengajar-kelas')->name('pengajar-kelas.')
-            ->middleware('can:kelola-pengajar-kelas')->where(['pengajarKelas' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-pengajar-kelas')
+            ->where(['pengajarKelas' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{pengajarKelas}/edit', 'edit')->name('edit');
@@ -255,9 +425,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Jadwal Kuliah (Diperbaiki)
+        // Jadwal Kuliah
         Route::controller(JadwalKuliahController::class)->prefix('jadwal-kuliah')->name('jadwal-kuliah.')
-            ->middleware('can:kelola-jadwal-kuliah')->where(['jadwalKuliah' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-jadwal-kuliah')
+            ->where(['jadwalKuliah' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{jadwalKuliah}/edit', 'edit')->name('edit');
@@ -269,9 +441,11 @@ Route::prefix('admin')
                 });
             });
 
-        // Pertemuan (Diperbaiki)
+        // Pertemuan
         Route::controller(PertemuanController::class)->prefix('pertemuan')->name('pertemuan.')
-            ->middleware('can:kelola-pertemuan')->where(['pertemuan' => '[0-9]+'])->group(function (): void {
+            ->middleware('can:kelola-pertemuan')
+            ->where(['pertemuan' => '[0-9]+'])
+            ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{pertemuan}/edit', 'edit')->name('edit');
@@ -287,22 +461,21 @@ Route::prefix('admin')
             });
     });
 
-// ==========================================================
-// GRUP PRESENSI (Di luar admin)
-// ==========================================================
-Route::middleware('cache.headers:no_store;private')->group(function (): void {
-    Route::get('/login/dosen', [PresensiSessionController::class, 'create'])->name('presensi.login');
-    Route::post('/login/dosen', [PresensiSessionController::class, 'store'])->middleware('throttle:presensi-login')->name('presensi.login.store');
-});
-
+/*
+|--------------------------------------------------------------------------
+| 4. PRESENSI (dosen/pengajar)
+|--------------------------------------------------------------------------
+*/
 Route::prefix('presensi')->name('presensi.')
     ->middleware([AuthenticatePresensi::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
     ->group(function (): void {
-        Route::post('/logout', [PresensiSessionController::class, 'destroy'])
-            ->middleware('throttle:30,1')->name('logout');
+        Route::post('/logout', [PortalSessionController::class, 'destroy'])
+            ->middleware('throttle:30,1')
+            ->name('logout');
 
         Route::controller(PresensiController::class)
-            ->middleware('can:akses-presensi')->where(['pertemuan' => '[0-9]+', 'presensi' => '[0-9]+'])
+            ->middleware('can:akses-presensi')
+            ->where(['pertemuan' => '[0-9]+', 'presensi' => '[0-9]+'])
             ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/{pertemuan}', 'show')->name('show');
@@ -319,262 +492,332 @@ Route::prefix('presensi')->name('presensi.')
                 });
             });
     });
-// Tambahkan di level terluar routes/web.php, sesudah seluruh group yang sudah ada.
-\Illuminate\Support\Facades\Route::middleware('cache.headers:no_store;private')->group(function (): void {
-    \Illuminate\Support\Facades\Route::get('/login/berkas', [\App\Http\Controllers\Auth\BerkasSessionController::class, 'create'])->name('berkas.login');
-    \Illuminate\Support\Facades\Route::post('/login/berkas', [\App\Http\Controllers\Auth\BerkasSessionController::class, 'store'])
-        ->middleware('throttle:berkas-login')->name('berkas.login.store');
-});
-\Illuminate\Support\Facades\Route::prefix('berkas')->name('berkas.')
-    ->middleware([\App\Http\Middleware\AuthenticateBerkas::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
+
+/*
+|--------------------------------------------------------------------------
+| 5. BERKAS
+|--------------------------------------------------------------------------
+*/
+Route::prefix('berkas')->name('berkas.')
+    ->middleware([AuthenticateBerkas::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::post('/logout', [\App\Http\Controllers\Auth\BerkasSessionController::class, 'destroy'])
-            ->middleware('throttle:30,1')->name('logout');
-        \Illuminate\Support\Facades\Route::controller(\App\Http\Controllers\BerkasController::class)
-            ->middleware('can:akses-berkas')->where(['berkas' => '[0-9]+'])->group(function (): void {
-                \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-                \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-                \Illuminate\Support\Facades\Route::post('/', 'store')->middleware('throttle:berkas-upload')->name('store');
-                \Illuminate\Support\Facades\Route::get('/{berkas}', 'show')->name('show');
-                \Illuminate\Support\Facades\Route::get('/{berkas}/edit', 'edit')->name('edit');
-                \Illuminate\Support\Facades\Route::get('/{berkas}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
-                \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-                    \Illuminate\Support\Facades\Route::patch('/{berkas}', 'update')->name('update');
-                    \Illuminate\Support\Facades\Route::post('/{berkas}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
-                    \Illuminate\Support\Facades\Route::post('/{berkas}/pulihkan', 'pulihkan')->name('pulihkan');
-                    \Illuminate\Support\Facades\Route::post('/{berkas}/tautan-unduh', 'tautan')->name('tautan');
+        Route::post('/logout', [PortalSessionController::class, 'destroy'])
+            ->middleware('throttle:30,1')
+            ->name('logout');
+
+        Route::controller(BerkasController::class)
+            ->middleware('can:akses-berkas')
+            ->where(['berkas' => '[0-9]+'])
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::post('/', 'store')->middleware('throttle:berkas-upload')->name('store');
+                Route::get('/{berkas}', 'show')->name('show');
+                Route::get('/{berkas}/edit', 'edit')->name('edit');
+                Route::get('/{berkas}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::patch('/{berkas}', 'update')->name('update');
+                    Route::post('/{berkas}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+                    Route::post('/{berkas}/pulihkan', 'pulihkan')->name('pulihkan');
+                    Route::post('/{berkas}/tautan-unduh', 'tautan')->name('tautan');
                 });
             });
     });
-// Tambahkan SEKALI di routes/web.php, di luar seluruh grup admin/presensi/berkas.
-\Illuminate\Support\Facades\Route::prefix('materi')->name('materi.')
+
+/*
+|--------------------------------------------------------------------------
+| 6. MATERI
+|--------------------------------------------------------------------------
+*/
+Route::prefix('materi')->name('materi.')
     ->middleware([
-        \App\Http\Middleware\AuthenticateMateri::class . ':web',
+        AuthenticateMateri::class . ':web',
         'auth.session',
         'cache.headers:no_store;private',
-        'can:akses-materi'
+        'can:akses-materi',
     ])
-    ->controller(\App\Http\Controllers\MateriController::class)
+    ->controller(MateriController::class)
     ->where(['materi' => '[0-9]+', 'lampiran' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/kelas', 'kelas')->name('kelas');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{materi}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{materi}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::get('/{materi}/lampiran/{lampiran}/unduh', 'unduh')
-            ->middleware(['signed', 'throttle:30,1'])->name('unduh');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{materi}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{materi}/terbitkan', 'terbitkan')->name('terbitkan');
-            \Illuminate\Support\Facades\Route::post('/{materi}/tarik', 'tarik')->name('tarik');
-            \Illuminate\Support\Facades\Route::post('/{materi}/arsipkan', 'arsipkan')->name('arsipkan');
-            \Illuminate\Support\Facades\Route::post('/{materi}/pulihkan', 'pulihkan')->name('pulihkan');
-            \Illuminate\Support\Facades\Route::post('/{materi}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
+        Route::get('/', 'index')->name('index');
+        Route::get('/kelas', 'kelas')->name('kelas');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{materi}', 'show')->name('show');
+        Route::get('/{materi}/edit', 'edit')->name('edit');
+        Route::get('/{materi}/lampiran/{lampiran}/unduh', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])
+            ->name('unduh');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{materi}', 'update')->name('update');
+            Route::post('/{materi}/terbitkan', 'terbitkan')->name('terbitkan');
+            Route::post('/{materi}/tarik', 'tarik')->name('tarik');
+            Route::post('/{materi}/arsipkan', 'arsipkan')->name('arsipkan');
+            Route::post('/{materi}/pulihkan', 'pulihkan')->name('pulihkan');
+            Route::post('/{materi}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
         });
     });
-// Tambahkan SEKALI di routes/web.php, di luar seluruh grup admin/presensi/berkas.
-\Illuminate\Support\Facades\Route::prefix('kegiatan')->name('kegiatan.')
+
+/*
+|--------------------------------------------------------------------------
+| 7. KEGIATAN (tugas, latihan, UTS, UAS)
+|--------------------------------------------------------------------------
+*/
+Route::prefix('kegiatan')->name('kegiatan.')
     ->middleware([
-        \App\Http\Middleware\AuthenticateKegiatan::class . ':web',
+        AuthenticateKegiatan::class . ':web',
         'auth.session',
         'cache.headers:no_store;private',
-        'can:akses-kegiatan'
+        'can:akses-kegiatan',
     ])
-    ->controller(\App\Http\Controllers\KegiatanController::class)
+    ->controller(KegiatanController::class)
     ->where(['kegiatan' => '[0-9]+', 'lampiran' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/kelas', 'kelas')->name('kelas');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{kegiatan}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{kegiatan}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::get('/{kegiatan}/lampiran/{lampiran}/unduh', 'unduh')
-            ->middleware(['signed', 'throttle:30,1'])->name('unduh');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{kegiatan}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/terbitkan', 'terbitkan')->name('terbitkan');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/tutup', 'tutup')->name('tutup');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/buka-kembali', 'bukaKembali')->name('bukaKembali');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/perpanjang', 'perpanjang')->name('perpanjang');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/arsipkan', 'arsipkan')->name('arsipkan');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/pulihkan', 'pulihkan')->name('pulihkan');
-            \Illuminate\Support\Facades\Route::post('/{kegiatan}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
+        Route::get('/', 'index')->name('index');
+        Route::get('/kelas', 'kelas')->name('kelas');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{kegiatan}', 'show')->name('show');
+        Route::get('/{kegiatan}/edit', 'edit')->name('edit');
+        Route::get('/{kegiatan}/lampiran/{lampiran}/unduh', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])
+            ->name('unduh');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{kegiatan}', 'update')->name('update');
+            Route::post('/{kegiatan}/tutup', 'tutup')->name('tutup');
+            Route::post('/{kegiatan}/buka-kembali', 'bukaKembali')->name('bukaKembali');
+            Route::post('/{kegiatan}/perpanjang', 'perpanjang')->name('perpanjang');
+            Route::post('/{kegiatan}/arsipkan', 'arsipkan')->name('arsipkan');
+            Route::post('/{kegiatan}/pulihkan', 'pulihkan')->name('pulihkan');
+            Route::post('/{kegiatan}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
         });
     });
-// Tempel SEKALI di luar seluruh grup admin, kegiatan, berkas, dan materi.
-\Illuminate\Support\Facades\Route::prefix('pengumpulan')->name('pengumpulan.')
+
+/*
+|--------------------------------------------------------------------------
+| 8. PENGUMPULAN (jawaban mahasiswa atas kegiatan)
+|--------------------------------------------------------------------------
+*/
+Route::prefix('pengumpulan')->name('pengumpulan.')
     ->middleware([
-        \App\Http\Middleware\AuthenticatePengumpulan::class . ':web',
+        AuthenticatePengumpulan::class . ':web',
         'auth.session',
         'cache.headers:no_store;private',
-        'can:akses-pengumpulan'
+        'can:akses-pengumpulan',
     ])
-    ->controller(\App\Http\Controllers\PengumpulanController::class)
+    ->controller(PengumpulanController::class)
     ->where(['kegiatan' => '[0-9]+', 'pengumpulan' => '[0-9]+', 'lampiran' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/kegiatan/{kegiatan}/saya', 'saya')->name('saya');
-        \Illuminate\Support\Facades\Route::get('/kegiatan/{kegiatan}/rekap', 'rekap')->name('rekap');
-        \Illuminate\Support\Facades\Route::get('/{pengumpulan}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{pengumpulan}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::get('/{pengumpulan}/lampiran/{lampiran}/unduh', 'unduh')
-            ->middleware(['signed', 'throttle:30,1'])->name('unduh');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/kegiatan/{kegiatan}/draf', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{pengumpulan}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{pengumpulan}/kirim', 'kirim')->name('kirim');
-            \Illuminate\Support\Facades\Route::post('/{pengumpulan}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
-        });
+        Route::get('/', 'index')->name('index');
+        Route::get('/kegiatan/{kegiatan}/saya', 'saya')->name('saya');
+        Route::get('/kegiatan/{kegiatan}/rekap', 'rekap')->name('rekap');
+        Route::post('/kegiatan/{kegiatan}/jawaban', 'store')
+            ->middleware('throttle:20,1')
+            ->name('store');
+
+        Route::get('/{pengumpulan}', 'show')->name('show');
+        Route::get('/{pengumpulan}/edit', 'edit')->name('edit');
+        Route::patch('/{pengumpulan}', 'update')->middleware('throttle:20,1')->name('update');
+        Route::delete('/{pengumpulan}', 'destroy')->middleware('throttle:10,1')->name('destroy');
+
+        Route::post('/{pengumpulan}/lampiran/{lampiran}/tautan', 'tautan')
+            ->middleware('throttle:30,1')
+            ->name('tautan');
+        Route::get('/{pengumpulan}/lampiran/{lampiran}/unduh', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])
+            ->name('unduh');
     });
-// Tempel SEKALI di routes/web.php, DI LUAR seluruh grup route lama.
-\Illuminate\Support\Facades\Route::prefix('keuangan/jenis-biaya')->name('keuangan.jenis-biaya.')
+
+/*
+|--------------------------------------------------------------------------
+| 9. KEUANGAN
+|--------------------------------------------------------------------------
+*/
+
+// Dashboard Admin Keuangan
+Route::get('/keuangan', [KeuanganDashboardController::class, 'index'])
+    ->middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private'])
+    ->name('keuangan.dashboard');
+
+// Jenis Biaya
+Route::prefix('keuangan/jenis-biaya')->name('keuangan.jenis-biaya.')
     ->middleware([
-        \App\Http\Middleware\AuthenticateKeuangan::class . ':web',
+        AuthenticateKeuangan::class . ':web',
         'auth.session',
         'cache.headers:no_store;private',
-        'can:akses-jenis-biaya'
+        'can:akses-jenis-biaya',
     ])
-    ->controller(\App\Http\Controllers\JenisBiayaController::class)
+    ->controller(JenisBiayaController::class)
     ->where(['jenisBiaya' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{jenisBiaya}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{jenisBiaya}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{jenisBiaya}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{jenisBiaya}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
-            \Illuminate\Support\Facades\Route::post('/{jenisBiaya}/aktifkan', 'aktifkan')->name('aktifkan');
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{jenisBiaya}', 'show')->name('show');
+        Route::get('/{jenisBiaya}/edit', 'edit')->name('edit');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{jenisBiaya}', 'update')->name('update');
+            Route::post('/{jenisBiaya}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+            Route::post('/{jenisBiaya}/aktifkan', 'aktifkan')->name('aktifkan');
         });
     });
 
-// Tambahkan SEKALI, DI LUAR grup admin/keuangan lain di routes/web.php.
-\Illuminate\Support\Facades\Route::prefix('tagihan')->name('tagihan.')
+// Tagihan
+Route::prefix('tagihan')->name('tagihan.')
     ->middleware([
-        \App\Http\Middleware\AuthenticateKeuangan::class . ':web',
+        AuthenticateKeuangan::class . ':web',
         'auth.session',
         'cache.headers:no_store;private',
-        'can:akses-tagihan'
+        'can:akses-tagihan',
     ])
-    ->controller(\App\Http\Controllers\TagihanController::class)
+    ->controller(TagihanController::class)
     ->where(['tagihan' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{tagihan}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{tagihan}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{tagihan}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{tagihan}/terbitkan', 'terbitkan')->name('terbitkan');
-            \Illuminate\Support\Facades\Route::post('/{tagihan}/batalkan', 'batalkan')->name('batalkan');
-            \Illuminate\Support\Facades\Route::post('/{tagihan}/buka-draf', 'bukaDraf')->name('buka-draf');
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{tagihan}', 'show')->name('show');
+        Route::get('/{tagihan}/edit', 'edit')->name('edit');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{tagihan}', 'update')->name('update');
+            Route::post('/{tagihan}/terbitkan', 'terbitkan')->name('terbitkan');
+            Route::post('/{tagihan}/batalkan', 'batalkan')->name('batalkan');
+            Route::post('/{tagihan}/buka-draf', 'bukaDraf')->name('buka-draf');
         });
     });
 
-// Tempel SEKALI di routes/web.php, DI LUAR semua grup route lama.
-\Illuminate\Support\Facades\Route::prefix('pembayaran')->name('pembayaran.')
-    ->middleware([\App\Http\Middleware\AuthenticateKeuangan::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-pembayaran'])
-    ->controller(\App\Http\Controllers\PembayaranController::class)
-    ->where(['tagihan' => '[0-9]+', 'pembayaran' => '[0-9]+'])
-    ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/tagihan/{tagihan}/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{pembayaran}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{pembayaran}/bukti', 'tautan')->middleware('throttle:30,1')->name('tautan');
-        \Illuminate\Support\Facades\Route::get('/{pembayaran}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
-        \Illuminate\Support\Facades\Route::middleware('throttle:10,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/tagihan/{tagihan}', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::post('/{pembayaran}/batalkan', 'batalkan')->name('batalkan');
-        });
-    });
-
-// Tempel SEKALI di routes/web.php, DI LUAR seluruh grup route lama.
-\Illuminate\Support\Facades\Route::prefix('admin/jenis-surat')->name('admin.jenis-surat.')
+// Pembayaran
+Route::prefix('pembayaran')->name('pembayaran.')
     ->middleware([
-        \App\Http\Middleware\AuthenticateSurat::class . ':web',
+        AuthenticateKeuangan::class . ':web',
         'auth.session',
         'cache.headers:no_store;private',
-        'can:akses-jenis-surat'
+        'can:akses-pembayaran',
     ])
-    ->controller(\App\Http\Controllers\JenisSuratController::class)
+    ->controller(PembayaranController::class)
+    ->where(['tagihan' => '[0-9]+', 'pembayaran' => '[0-9]+'])
+    ->group(function (): void {
+        Route::get('/', 'index')->name('index');
+        Route::get('/tagihan/{tagihan}/create', 'create')->name('create');
+        Route::get('/{pembayaran}', 'show')->name('show');
+        Route::get('/{pembayaran}/bukti', 'tautan')->middleware('throttle:30,1')->name('tautan');
+        Route::get('/{pembayaran}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
+        Route::middleware('throttle:10,1')->group(function (): void {
+            Route::post('/tagihan/{tagihan}', 'store')->name('store');
+            Route::post('/{pembayaran}/batalkan', 'batalkan')->name('batalkan');
+            Route::post('/{pembayaran}/terima', 'terima')->name('terima');
+            Route::post('/{pembayaran}/tolak', 'tolak')->name('tolak');
+        });
+    });
+
+/*
+|--------------------------------------------------------------------------
+| 10. LAYANAN SURAT, KALENDER, PENGUMUMAN, NOTIFIKASI
+|--------------------------------------------------------------------------
+*/
+
+// Jenis Surat (admin)
+Route::prefix('admin/jenis-surat')->name('admin.jenis-surat.')
+    ->middleware([
+        AuthenticateSurat::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-jenis-surat',
+    ])
+    ->controller(JenisSuratController::class)
     ->where(['jenisSurat' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{jenisSurat}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{jenisSurat}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{jenisSurat}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{jenisSurat}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
-            \Illuminate\Support\Facades\Route::post('/{jenisSurat}/aktifkan', 'aktifkan')->name('aktifkan');
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{jenisSurat}', 'show')->name('show');
+        Route::get('/{jenisSurat}/edit', 'edit')->name('edit');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{jenisSurat}', 'update')->name('update');
+            Route::post('/{jenisSurat}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+            Route::post('/{jenisSurat}/aktifkan', 'aktifkan')->name('aktifkan');
         });
     });
 
-// Tempel SEKALI di routes/web.php, DI LUAR grup route sebelumnya.
-\Illuminate\Support\Facades\Route::prefix('surat')->name('surat.')
-    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-surat'])
-    ->controller(\App\Http\Controllers\PermohonanSuratController::class)
+// Permohonan Surat
+Route::prefix('surat')->name('surat.')
+    ->middleware([
+        AuthenticateSurat::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-surat',
+    ])
+    ->controller(PermohonanSuratController::class)
     ->where(['permohonanSurat' => '[0-9]+', 'bagian' => 'lampiran|hasil'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::post('/', 'store')->middleware('throttle:10,1')->name('store');
-        \Illuminate\Support\Facades\Route::get('/{permohonanSurat}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::post('/{permohonanSurat}/tindakan', 'tindakan')->middleware('throttle:10,1')->name('tindakan');
-        \Illuminate\Support\Facades\Route::get('/{permohonanSurat}/dokumen/{bagian}', 'tautan')->middleware('throttle:30,1')->name('tautan');
-        \Illuminate\Support\Facades\Route::get('/{permohonanSurat}/unduh/{bagian}', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::post('/', 'store')->middleware('throttle:10,1')->name('store');
+        Route::get('/{permohonanSurat}', 'show')->name('show');
+        Route::post('/{permohonanSurat}/tindakan', 'tindakan')->middleware('throttle:10,1')->name('tindakan');
+        Route::get('/{permohonanSurat}/dokumen/{bagian}', 'tautan')->middleware('throttle:30,1')->name('tautan');
+        Route::get('/{permohonanSurat}/unduh/{bagian}', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
     });
 
-
-// Tempel SEKALI di routes/web.php, DI LUAR semua grup route lama.
-\Illuminate\Support\Facades\Route::prefix('kalender-akademik')->name('kalender.')
-    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-kalender'])
-    ->controller(\App\Http\Controllers\KalenderAkademikController::class)
+// Kalender Akademik
+Route::prefix('kalender-akademik')->name('kalender.')
+    ->middleware([
+        AuthenticateSurat::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-kalender',
+    ])
+    ->controller(KalenderAkademikController::class)
     ->where(['kalenderAkademik' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{kalenderAkademik}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{kalenderAkademik}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{kalenderAkademik}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{kalenderAkademik}/tindakan', 'tindakan')->name('tindakan');
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{kalenderAkademik}', 'show')->name('show');
+        Route::get('/{kalenderAkademik}/edit', 'edit')->name('edit');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{kalenderAkademik}', 'update')->name('update');
+            Route::post('/{kalenderAkademik}/tindakan', 'tindakan')->name('tindakan');
         });
     });
 
-
-// Tambahkan sekali DI LUAR grup admin yang sudah ada.
-\Illuminate\Support\Facades\Route::prefix('pengumuman')->name('pengumuman.')
-    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-pengumuman'])
-    ->controller(\App\Http\Controllers\PengumumanController::class)
-    ->where(['pengumuman' => '[0-9]+'])->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
-        \Illuminate\Support\Facades\Route::get('/{pengumuman}', 'show')->name('show');
-        \Illuminate\Support\Facades\Route::get('/{pengumuman}/edit', 'edit')->name('edit');
-        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
-            \Illuminate\Support\Facades\Route::patch('/{pengumuman}', 'update')->name('update');
-            \Illuminate\Support\Facades\Route::post('/{pengumuman}/tindakan', 'tindakan')->name('tindakan');
-        });
-    });
-
-// Tambahkan sekali DI LUAR semua grup route sebelumnya.
-\Illuminate\Support\Facades\Route::prefix('notifikasi')->name('notifikasi.')
-    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-notifikasi'])
-    ->controller(\App\Http\Controllers\NotifikasiController::class)->where(['notifikasi' => '[0-9]+'])
+// Pengumuman
+Route::prefix('pengumuman')->name('pengumuman.')
+    ->middleware([
+        AuthenticateSurat::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-pengumuman',
+    ])
+    ->controller(PengumumanController::class)
+    ->where(['pengumuman' => '[0-9]+'])
     ->group(function (): void {
-        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
-        \Illuminate\Support\Facades\Route::middleware('throttle:60,1')->group(function (): void {
-            \Illuminate\Support\Facades\Route::post('/baca-halaman', 'bacaHalaman')->name('baca-halaman');
-            \Illuminate\Support\Facades\Route::post('/{notifikasi}/baca', 'baca')->name('baca');
-            \Illuminate\Support\Facades\Route::post('/{notifikasi}/buka', 'buka')->name('buka');
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::get('/{pengumuman}', 'show')->name('show');
+        Route::get('/{pengumuman}/edit', 'edit')->name('edit');
+        Route::middleware('throttle:30,1')->group(function (): void {
+            Route::post('/', 'store')->name('store');
+            Route::patch('/{pengumuman}', 'update')->name('update');
+            Route::post('/{pengumuman}/tindakan', 'tindakan')->name('tindakan');
+        });
+    });
+
+// Notifikasi
+Route::prefix('notifikasi')->name('notifikasi.')
+    ->middleware([
+        AuthenticateSurat::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-notifikasi',
+    ])
+    ->controller(NotifikasiController::class)
+    ->where(['notifikasi' => '[0-9]+'])
+    ->group(function (): void {
+        Route::get('/', 'index')->name('index');
+        Route::middleware('throttle:60,1')->group(function (): void {
+            Route::post('/baca-halaman', 'bacaHalaman')->name('baca-halaman');
+            Route::post('/{notifikasi}/baca', 'baca')->name('baca');
+            Route::post('/{notifikasi}/buka', 'buka')->name('buka');
         });
     });

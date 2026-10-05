@@ -9,6 +9,6 @@ class AuthenticatePresensi extends Authenticate
 {
     protected function redirectTo(Request $request): ?string
     {
-        return $request->expectsJson() ? null : route('presensi.login');
+        return $request->expectsJson() ? null : route('login');
     }
 }

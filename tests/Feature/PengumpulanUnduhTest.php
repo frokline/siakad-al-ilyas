@@ -11,78 +11,231 @@ use Illuminate\Support\Facades\URL;
 
 class PengumpulanUnduhTest extends PengumpulanDatabaseTestCase
 {
-    private function jawaban(): Pengumpulan
-    {
+    private function jawaban(
+        int $userId = 3,
+        int $berkasId = 11
+    ): Pengumpulan {
         Storage::fake('berkas_local');
-        $b = Berkas::findOrFail(11);
-        $isi = 'ISI_JAWABAN_UJI';
-        Storage::disk('berkas_local')->put($b->object_key, $isi);
-        DB::table('berkas')->where('id', 11)->update(['ukuran_byte' => strlen($isi), 'sha256' => hash('sha256', $isi)]);
-        return $this->kirim($this->isi($this->draf($this->kegiatan())));
+
+        $berkas = Berkas::findOrFail($berkasId);
+        $isi = 'ISI_JAWABAN_UJI_' . $userId;
+
+        Storage::disk('berkas_local')->put(
+            $berkas->object_key,
+            $isi
+        );
+
+        DB::table('berkas')
+            ->where('id', $berkasId)
+            ->update([
+                'ukuran_byte' => strlen($isi),
+                'sha256' => hash('sha256', $isi),
+            ]);
+
+        return $this->jawab(
+            $this->kegiatan(),
+            null,
+            [(string) $berkasId],
+            null,
+            $userId
+        );
     }
-    private function tautan(Pengumpulan $p, int $userId = 3): string
-    {
-        $this->actingAs(User::findOrFail($userId), 'web');
-        return $this->post(route('pengumpulan.tautan', ['pengumpulan' => $p->id, 'lampiran' => $p->lampiran()->firstOrFail()->id]))
-            ->assertRedirect()->headers->get('Location');
+
+    private function tautan(
+        Pengumpulan $pengumpulan,
+        int $userId = 3
+    ): string {
+        $this->actingAs(
+            User::findOrFail($userId),
+            'web'
+        );
+
+        return $this->post(
+            route(
+                'pengumpulan.tautan',
+                [
+                    'pengumpulan' =>
+                        $pengumpulan->id,
+
+                    'lampiran' =>
+                        $pengumpulan
+                            ->lampiran()
+                            ->firstOrFail()
+                            ->id,
+                ]
+            )
+        )
+            ->assertRedirect()
+            ->headers
+            ->get('Location');
     }
-    public function test_pemilik_mendapat_isi_setelah_verifikasi_hash(): void
+
+    public function test_pemilik_dapat_mengunduh_jawaban(): void
     {
-        $p = $this->jawaban();
-        $url = $this->tautan($p);
-        $response = $this->get($url)->assertOk()->assertHeader('Content-Type', 'application/octet-stream')
-            ->assertHeader('X-Content-Type-Options', 'nosniff');
-        $this->assertSame('ISI_JAWABAN_UJI', $response->streamedContent());
+        $pengumpulan = $this->jawaban();
+        $url = $this->tautan($pengumpulan);
+
+        $response = $this->get($url)
+            ->assertOk()
+            ->assertHeader(
+                'Content-Type',
+                'application/octet-stream'
+            )
+            ->assertHeader(
+                'X-Content-Type-Options',
+                'nosniff'
+            );
+
+        $this->assertSame(
+            'ISI_JAWABAN_UJI_3',
+            $response->streamedContent()
+        );
     }
-    public function test_url_pemilik_tidak_dapat_dipakai_dosen_meski_berhak_membaca(): void
+
+    public function test_tautan_pemilik_tidak_dapat_dipakai_dosen(): void
     {
-        $p = $this->jawaban();
-        $url = $this->tautan($p);
-        $this->actingAs(User::findOrFail(2), 'web')->get($url)->assertForbidden();
-        $urlDosen = $this->tautan($p, 2);
+        $pengumpulan = $this->jawaban();
+        $urlPemilik = $this->tautan($pengumpulan);
+
+        $this->actingAs(
+            User::findOrFail(2),
+            'web'
+        )
+            ->get($urlPemilik)
+            ->assertForbidden();
+
+        $urlDosen = $this->tautan(
+            $pengumpulan,
+            2
+        );
+
         $this->get($urlDosen)->assertOk();
     }
-    public function test_mahasiswa_sekelas_tidak_bisa_mengunduh_jawaban_orang_lain(): void
+
+    public function test_mahasiswa_lain_tidak_bisa_mengunduh(): void
     {
-        $p = $this->jawaban();
-        $url = $this->tautan($p);
-        $this->actingAs(User::findOrFail(6), 'web')->get($url)->assertForbidden();
+        $pengumpulan = $this->jawaban();
+        $url = $this->tautan($pengumpulan);
+
+        $this->actingAs(
+            User::findOrFail(6),
+            'web'
+        )
+            ->get($url)
+            ->assertForbidden();
     }
-    public function test_pencabutan_penugasan_membatalkan_akses_url_yang_sudah_dibuat(): void
+
+    public function test_penugasan_dosen_dicabut_memblokir_tautan(): void
     {
-        $p = $this->jawaban();
-        $url = $this->tautan($p, 2);
-        DB::table('pengajar_kelas')->where('dosen_id', 20)->update(['aktif' => false]);
+        $pengumpulan = $this->jawaban();
+
+        $url = $this->tautan(
+            $pengumpulan,
+            2
+        );
+
+        DB::table('pengajar_kelas')
+            ->where('dosen_id', 20)
+            ->update(['aktif' => false]);
+
         $this->get($url)->assertForbidden();
     }
+
     public function test_tautan_kedaluwarsa_ditolak(): void
     {
-        $p = $this->jawaban();
-        $url = $this->tautan($p);
+        $pengumpulan = $this->jawaban();
+        $url = $this->tautan($pengumpulan);
+
         $this->jam('2030-01-10 02:03:00');
+
         $this->get($url)->assertForbidden();
     }
-    public function test_objek_berubah_tidak_dikirim_ke_browser(): void
+
+    public function test_objek_yang_berubah_tidak_dikirim(): void
     {
-        $p = $this->jawaban();
-        $url = $this->tautan($p);
-        $b = Berkas::findOrFail(11);
-        Storage::disk('berkas_local')->put($b->object_key, str_repeat('X', $b->ukuran_byte));
+        $pengumpulan = $this->jawaban();
+        $url = $this->tautan($pengumpulan);
+
+        $berkas = Berkas::findOrFail(11);
+
+        Storage::disk('berkas_local')->put(
+            $berkas->object_key,
+            str_repeat('X', $berkas->ukuran_byte)
+        );
+
         $this->get($url)->assertStatus(503);
     }
-    public function test_lampiran_dari_versi_lain_ditolak_meski_url_bertanda_tangan(): void
+
+    public function test_lampiran_pengumpulan_lain_ditolak(): void
     {
-        $p = $this->jawaban();
-        $baru = $this->isi($this->draf($p->kegiatan, 1));
-        $lampiran = $baru->lampiran()->firstOrFail();
-        $this->actingAs(User::findOrFail(3), 'web');
-        $url = URL::temporarySignedRoute('pengumpulan.unduh', now()->addMinute(), [
-            'pengumpulan' => $p->id,
-            'lampiran' => $lampiran->id,
-            'pemohon' => 3,
-            'versi_pengumpulan' => $p->revisi,
-            'versi_berkas' => 1,
-        ]);
+        Storage::fake('berkas_local');
+
+        $kegiatan = $this->kegiatan();
+
+        foreach (
+            [
+                11 => [3, 'ISI_A'],
+                12 => [6, 'ISI_B'],
+            ] as $berkasId => [$userId, $isi]
+        ) {
+            $berkas = Berkas::findOrFail($berkasId);
+
+            Storage::disk('berkas_local')->put(
+                $berkas->object_key,
+                $isi
+            );
+
+            DB::table('berkas')
+                ->where('id', $berkasId)
+                ->update([
+                    'ukuran_byte' => strlen($isi),
+                    'sha256' => hash('sha256', $isi),
+                ]);
+        }
+
+        $milikA = $this->jawab(
+            $kegiatan,
+            null,
+            ['11'],
+            null,
+            3
+        );
+
+        $milikB = $this->jawab(
+            $kegiatan,
+            null,
+            ['12'],
+            null,
+            6
+        );
+
+        $lampiranB = $milikB
+            ->lampiran()
+            ->firstOrFail();
+
+        $berkasB = Berkas::findOrFail(
+            $lampiranB->berkas_id
+        );
+
+        $this->actingAs(
+            User::findOrFail(3),
+            'web'
+        );
+
+        $url = URL::temporarySignedRoute(
+            'pengumpulan.unduh',
+            now()->addMinute(),
+            [
+                'pengumpulan' => $milikA->id,
+                'lampiran' => $lampiranB->id,
+                'pemohon' => 3,
+                'versi_pengumpulan' =>
+                    $milikA->revisi,
+                'versi_berkas' =>
+                    $berkasB->revisi,
+            ]
+        );
+
         $this->get($url)->assertNotFound();
     }
 }

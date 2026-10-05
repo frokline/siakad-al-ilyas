@@ -11,6 +11,6 @@ class AuthenticateKeuangan extends Authenticate
     {
         return $request->expectsJson()
             ? null
-            : route('berkas.login');
+            : route('login');
     }
 }

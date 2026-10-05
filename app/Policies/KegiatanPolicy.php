@@ -7,60 +7,168 @@ use App\Models\KelasKuliah;
 use App\Models\User;
 use App\Services\AksesKegiatan;
 
-class KegiatanPolicy
+final class KegiatanPolicy
 {
-    public function __construct(private readonly AksesKegiatan $akses) {}
-    public function viewAny(User $u): bool
-    {
-        return $this->akses->masuk($u);
+    public function __construct(
+        private readonly AksesKegiatan $akses
+    ) {
     }
-    public function create(User $u, KelasKuliah $kelas): bool
+
+    public function viewAny(User $user): bool
     {
-        return $this->akses->kelola($u, $kelas->id) && $this->akses->konteksTulis($kelas->id);
+        return $this->akses->masuk($user);
     }
-    public function view(User $u, Kegiatan $k): bool
-    {
-        return $this->akses->lihat($u, $k);
+
+    public function create(
+        User $user,
+        KelasKuliah $kelas
+    ): bool {
+        return $this->akses->kelola(
+            $user,
+            (int) $kelas->id
+        )
+            && $this->akses->konteksTulis(
+                (int) $kelas->id
+            );
     }
-    public function bacaIsi(User $u, Kegiatan $k): bool
-    {
-        return $this->akses->bacaIsi($u, $k);
+
+    public function view(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $this->akses->lihat(
+            $user,
+            $kegiatan
+        );
     }
-    public function manage(User $u, Kegiatan $k): bool
-    {
-        return $this->akses->kelola($u, $k->kelas_kuliah_id);
+
+    public function bacaIsi(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $this->akses->bacaIsi(
+            $user,
+            $kegiatan
+        );
     }
-    public function update(User $u, Kegiatan $k): bool
-    {
-        return $k->status === Kegiatan::DRAF && $k->terbit_at === null && $this->manage($u, $k) && $this->akses->konteksTulis($k->kelas_kuliah_id);
+
+    public function manage(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $this->akses->kelola(
+            $user,
+            (int) $kegiatan->kelas_kuliah_id
+        );
     }
-    private function aktif(User $u, Kegiatan $k): bool
-    {
-        return $this->manage($u, $k) && $this->akses->konteksTulis($k->kelas_kuliah_id)
-            && KelasKuliah::query()->whereKey($k->kelas_kuliah_id)->where('status', 'aktif')->exists();
+
+    public function update(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return in_array(
+            $kegiatan->status,
+            [
+                Kegiatan::TERBIT,
+                Kegiatan::DITUTUP,
+            ],
+            true
+        )
+            && $this->manage(
+                $user,
+                $kegiatan
+            )
+            && $this->akses->konteksTulis(
+                (int) $kegiatan->kelas_kuliah_id
+            );
     }
-    public function terbitkan(User $u, Kegiatan $k): bool
-    {
-        return $this->update($u, $k) && $this->aktif($u, $k);
+
+    public function tutup(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $kegiatan->status
+                === Kegiatan::TERBIT
+            && $this->manage(
+                $user,
+                $kegiatan
+            );
     }
-    public function tutup(User $u, Kegiatan $k): bool
-    {
-        return $k->status === Kegiatan::TERBIT && $this->manage($u, $k);
+
+    public function bukaKembali(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $kegiatan->status
+                === Kegiatan::DITUTUP
+            && $this->aktif(
+                $user,
+                $kegiatan
+            );
     }
-    public function bukaKembali(User $u, Kegiatan $k): bool
-    {
-        return $k->status === Kegiatan::DITUTUP && $this->aktif($u, $k);
+
+    public function perpanjang(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $kegiatan->memerlukanPengumpulan()
+            && in_array(
+                $kegiatan->status,
+                [
+                    Kegiatan::TERBIT,
+                    Kegiatan::DITUTUP,
+                ],
+                true
+            )
+            && $this->aktif(
+                $user,
+                $kegiatan
+            );
     }
-    public function perpanjang(User $u, Kegiatan $k): bool
-    {
-        return in_array($k->status, [Kegiatan::TERBIT, Kegiatan::DITUTUP], true) && $this->aktif($u, $k);
+
+    public function arsipkan(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $kegiatan->status
+                !== Kegiatan::ARSIP
+            && $this->manage(
+                $user,
+                $kegiatan
+            );
     }
-    public function arsipkan(User $u, Kegiatan $k): bool
-    {
-        return $k->status !== Kegiatan::ARSIP && $this->manage($u, $k);
+
+    public function pulihkan(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $kegiatan->status
+                === Kegiatan::ARSIP
+            && $this->manage(
+                $user,
+                $kegiatan
+            )
+            && $this->akses->konteksTulis(
+                (int) $kegiatan->kelas_kuliah_id
+            );
     }
-    public function pulihkan(User $u, Kegiatan $k): bool
-    {
-        return $k->status === Kegiatan::ARSIP && $this->manage($u, $k) && $this->akses->konteksTulis($k->kelas_kuliah_id);
+
+    private function aktif(
+        User $user,
+        Kegiatan $kegiatan
+    ): bool {
+        return $this->manage(
+            $user,
+            $kegiatan
+        )
+            && $this->akses->konteksTulis(
+                (int) $kegiatan->kelas_kuliah_id
+            )
+            && KelasKuliah::query()
+                ->whereKey(
+                    $kegiatan->kelas_kuliah_id
+                )
+                ->where('status', 'aktif')
+                ->exists();
     }
 }

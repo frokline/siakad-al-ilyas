@@ -39,7 +39,7 @@ final class AturanKalender
         $v = Validator::make($data, $rules)->validate();
         $mulai = self::waktu($v['mulai_lokal']);
         $selesai = self::waktu($v['selesai_lokal']);
-        if ($selesai->lessThanOrEqualTo($mulai) || $selesai->greaterThan($mulai->addDays(366))) {
+        if ($selesai->lteTo($mulai) || $selesai->greaterThan($mulai->addDays(366))) {
             throw ValidationException::withMessages(['selesai_lokal' => 'Akhir harus setelah awal; durasi agenda maksimal 366 hari.']);
         }
         return [

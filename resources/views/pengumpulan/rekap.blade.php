@@ -1,85 +1,275 @@
 @extends('layouts.pengumpulan')
-@section('title', 'Rekap Pengumpulan')
+
+@section('title', 'Rekap Jawaban Mahasiswa')
+
 @section('content')
     <div class="heading">
-        <h1>Rekap pengumpulan</h1><a href="{{ route('kegiatan.show', $kegiatan) }}">Kembali ke kegiatan</a>
+        <div>
+            <p>Rekap dosen</p>
+            <h1>Rekap jawaban mahasiswa</h1>
+
+            <p>
+                {{ $kegiatan->judul }}
+                —
+                {{ $kegiatan->kelasKuliah?->kode ?? 'Kelas' }}
+            </p>
+        </div>
+
+        <a href="{{ route('kegiatan.show', $kegiatan) }}">
+            Kembali ke pembelajaran
+        </a>
     </div>
-    @include('pengumpulan._jadwal')
+
     <section class="card">
-        <h2>Peserta aktif saat ini</h2>
-        <p>{{ $total }} peserta aktif · {{ $sudah }} sudah mengirim · {{ $total - $sudah }} belum mengirim.
-        </p>
-        <p class="muted">Angka tidak dipengaruhi filter. Draf tidak dibaca atau dihitung sebagai kiriman. Rekap ini bukan
-            nilai.</p>
+        <h2>Ringkasan</h2>
+
+        <dl class="metadata">
+            <div>
+                <dt>Jumlah peserta</dt>
+                <dd>{{ $total }}</dd>
+            </div>
+
+            <div>
+                <dt>Sudah mengumpulkan</dt>
+                <dd>{{ $sudah }}</dd>
+            </div>
+
+            <div>
+                <dt>Belum mengumpulkan</dt>
+                <dd>{{ max(0, $total - $sudah) }}</dd>
+            </div>
+
+            <div>
+                <dt>Persentase</dt>
+                <dd>
+                    {{ $total > 0
+                        ? number_format(
+                            ($sudah / $total) * 100,
+                            1,
+                            ',',
+                            '.'
+                        )
+                        : '0' }}%
+                </dd>
+            </div>
+        </dl>
     </section>
-    <form class="card filters" method="get" action="{{ route('pengumpulan.rekap', $kegiatan) }}">
-        <div class="field"><label for="q">Nama / NIM peserta aktif</label><input id="q" name="q"
-                maxlength="100" value="{{ $filter['q'] ?? '' }}"></div>
-        <div class="field"><label for="status">Status kiriman</label><select id="status" name="status">
-                <option value="">Semua peserta aktif</option>
-                <option value="sudah" @selected(($filter['status'] ?? '') === 'sudah')>Sudah mengirim</option>
-                <option value="belum" @selected(($filter['status'] ?? '') === 'belum')>Belum mengirim</option>
-            </select></div><button type="submit">Tampilkan</button><a
-            href="{{ route('pengumpulan.rekap', $kegiatan) }}">Reset</a>
+
+    <form
+        method="get"
+        action="{{ route(
+            'pengumpulan.rekap',
+            $kegiatan
+        ) }}"
+        class="card form-card"
+    >
+        <h2>Filter peserta</h2>
+
+        <div class="field">
+            <label for="q">
+                Nama atau NIM
+            </label>
+
+            <input
+                id="q"
+                name="q"
+                type="search"
+                maxlength="100"
+                value="{{ $filter['q'] ?? '' }}"
+            >
+        </div>
+
+        <div class="field">
+            <label for="status">
+                Status pengumpulan
+            </label>
+
+            <select id="status" name="status">
+                <option value="">
+                    Semua peserta
+                </option>
+
+                <option
+                    value="sudah"
+                    @selected(
+                        ($filter['status'] ?? '') === 'sudah'
+                    )
+                >
+                    Sudah mengumpulkan
+                </option>
+
+                <option
+                    value="belum"
+                    @selected(
+                        ($filter['status'] ?? '') === 'belum'
+                    )
+                >
+                    Belum mengumpulkan
+                </option>
+            </select>
+        </div>
+
+        <div class="actions">
+            <button type="submit">
+                Terapkan
+            </button>
+
+            <a href="{{ route(
+                'pengumpulan.rekap',
+                $kegiatan
+            ) }}">
+                Reset
+            </a>
+        </div>
     </form>
+
     <section class="card table-wrap">
+        <h2>Daftar peserta</h2>
+
         <table>
             <thead>
                 <tr>
                     <th>NIM</th>
-                    <th>Nama</th>
+                    <th>Nama mahasiswa</th>
                     <th>Status</th>
-                    <th>Kiriman yang berlaku</th>
+                    <th>Waktu pengumpulan</th>
+                    <th>Aksi</th>
                 </tr>
             </thead>
+
             <tbody>
-                @forelse($peserta as $p)
+                @forelse ($peserta as $item)
                     <tr>
-                        <td>{{ $p->nim }}</td>
-                        <td>{{ $p->nama }}</td>
-                        <td>{{ $p->pengumpulan_id ? 'Sudah mengirim' : 'Belum mengirim' }}</td>
+                        <td>{{ $item->nim }}</td>
+                        <td>{{ $item->nama }}</td>
+
                         <td>
-                            @if ($p->pengumpulan_id)
-                                <a href="{{ route('pengumpulan.show', $p->pengumpulan_id) }}">Lihat versi
-                                {{ $p->versi }}</a>@else—
+                            @if ($item->pengumpulan_id)
+                                Sudah mengumpulkan
+                            @else
+                                Belum mengumpulkan
+                            @endif
+                        </td>
+
+                        <td>
+                            @if ($item->diubah_at)
+                                Diubah:
+                                {{ \Illuminate\Support\Carbon::parse(
+                                    $item->diubah_at
+                                )
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @elseif ($item->dikirim_at)
+                                {{ \Illuminate\Support\Carbon::parse(
+                                    $item->dikirim_at
+                                )
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @else
+                                —
+                            @endif
+                        </td>
+
+                        <td>
+                            @if ($item->pengumpulan_id)
+                                <a href="{{ route(
+                                    'pengumpulan.show',
+                                    $item->pengumpulan_id
+                                ) }}">
+                                    Lihat jawaban
+                                </a>
+                            @else
+                                —
                             @endif
                         </td>
                     </tr>
-                @empty<tr>
-                        <td colspan="4">Tidak ada peserta aktif sesuai filter.</td>
+                @empty
+                    <tr>
+                        <td colspan="5">
+                            Tidak ada peserta sesuai filter.
+                        </td>
                     </tr>
                 @endforelse
             </tbody>
-        </table>{{ $peserta->links('pengumpulan._pagination') }}
+        </table>
+
+        {{ $peserta->links('pengumpulan._pagination') }}
     </section>
+
     <section class="card table-wrap">
-        <h2>Seluruh versi final yang pernah diterima</h2>
-        <p>Daftar historis ini tidak mengikuti filter peserta aktif. Kiriman peserta yang kemudian nonaktif tetap tercatat.
+        <h2>Riwayat pengumpulan</h2>
+
+        <p class="muted">
+            Riwayat tetap disimpan untuk keperluan pemeriksaan,
+            termasuk jawaban yang pernah dibatalkan.
         </p>
+
         <table>
             <thead>
                 <tr>
                     <th>Mahasiswa</th>
-                    <th>Detail KRS</th>
-                    <th>Versi</th>
-                    <th>Dikirim ({{ $zona }})</th>
+                    <th>Status</th>
+                    <th>Dikirim</th>
+                    <th>Terakhir diubah</th>
                     <th>Aksi</th>
                 </tr>
             </thead>
+
             <tbody>
-                @forelse($historis as $p)
+                @forelse ($historis as $item)
                     <tr>
-                        <td>{{ $p->pemilik->nama }}</td>
-                        <td>{{ $p->detail_krs_id }}</td>
-                        <td>{{ $p->versi }}</td>
-                        <td>{{ $p->dikirim_at->setTimezone($zona)->format('d-m-Y H:i:s') }}</td>
-                        <td><a href="{{ route('pengumpulan.show', $p) }}">Lihat</a></td>
+                        <td>
+                            {{ $item->pemilik?->nama ?? '—' }}
+                        </td>
+
+                        <td>
+                            {{ \App\Models\Pengumpulan::STATUS[
+                                $item->status
+                            ] ?? $item->status }}
+                        </td>
+
+                        <td>
+                            {{ $item->dikirim_at
+                                ? $item->dikirim_at
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i')
+                                : '—' }}
+                        </td>
+
+                        <td>
+                            @if ($item->dibatalkan_at)
+                                Dibatalkan:
+                                {{ $item->dibatalkan_at
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @elseif ($item->diubah_at)
+                                {{ $item->diubah_at
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @else
+                                —
+                            @endif
+                        </td>
+
+                        <td>
+                            <a href="{{ route(
+                                'pengumpulan.show',
+                                $item
+                            ) }}">
+                                Detail
+                            </a>
+                        </td>
                     </tr>
-                @empty<tr>
-                        <td colspan="5">Belum ada kiriman final.</td>
+                @empty
+                    <tr>
+                        <td colspan="5">
+                            Belum ada riwayat pengumpulan.
+                        </td>
                     </tr>
                 @endforelse
             </tbody>
-        </table>{{ $historis->links('pengumpulan._pagination') }}
+        </table>
+
+        {{ $historis->links('pengumpulan._pagination') }}
     </section>
 @endsection

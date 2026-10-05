@@ -10,26 +10,51 @@ use LogicException;
 
 class Kegiatan extends Model
 {
-    public const DRAF = 'draf';
+    public const MATERI = 'materi';
+    public const TUGAS = 'tugas';
+    public const LATIHAN = 'latihan';
+    public const UTS = 'uts';
+    public const UAS = 'uas';
+
     public const TERBIT = 'terbit';
     public const DITUTUP = 'ditutup';
     public const ARSIP = 'arsip';
-    public const STATUS = ['draf' => 'Draf', 'terbit' => 'Terbit', 'ditutup' => 'Ditutup', 'arsip' => 'Arsip'];
-    public const JENIS = ['tugas' => 'Tugas', 'latihan' => 'Latihan', 'uts' => 'UTS', 'uas' => 'UAS'];
-    public const ISI_TETAP = [
-        'pertemuan_id',
-        'jenis',
-        'metode',
-        'judul',
-        'instruksi',
-        'buka_at',
-        'maks_ukuran_byte',
-        'maks_berkas',
-        'ekstensi_diizinkan'
+
+    public const JENIS = [
+        self::MATERI => 'Materi',
+        self::TUGAS => 'Tugas',
+        self::LATIHAN => 'Latihan',
+        self::UTS => 'UTS',
+        self::UAS => 'UAS',
     ];
+
+    public const STATUS = [
+        self::TERBIT => 'Terbit',
+        self::DITUTUP => 'Ditutup',
+        self::ARSIP => 'Arsip',
+    ];
+
+    public const EKSTENSI_JAWABAN = [
+        'pdf',
+        'jpg',
+        'png',
+        'doc',
+        'docx',
+        'xls',
+        'xlsx',
+        'ppt',
+        'pptx',
+        'zip',
+    ];
+
     protected $table = 'kegiatan';
+
     protected $guarded = ['*'];
-    protected $hidden = ['form_token', 'hash_permohonan', 'instruksi'];
+
+    protected $hidden = [
+        'form_token',
+        'hash_permohonan',
+    ];
 
     protected function casts(): array
     {
@@ -48,128 +73,303 @@ class Kegiatan extends Model
             'ditutup_at' => 'immutable_datetime',
             'diarsipkan_at' => 'immutable_datetime',
             'created_at' => 'immutable_datetime',
-            'updated_at' => 'immutable_datetime'
+            'updated_at' => 'immutable_datetime',
         ];
     }
+
     protected static function booted(): void
     {
-        static::saving(function (self $k): void {
+        static::saving(function (self $kegiatan): void {
             if (
-                $k->getConnection()->transactionLevel() < 1 || blank($k->judul) || mb_strlen($k->judul) > 200
-                || blank($k->instruksi) || mb_strlen($k->instruksi) > 10000
-                || ! isset(self::JENIS[$k->jenis]) || ! isset(self::STATUS[$k->status])
-                || $k->metode !== 'pengumpulan_berkas' || $k->revisi < 1 || $k->revisi > 4294967295
-                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $k->hash_permohonan)
+                $kegiatan->getConnection()->transactionLevel() < 1
+                || blank($kegiatan->judul)
+                || mb_strlen($kegiatan->judul) > 200
+                || mb_strlen((string) $kegiatan->instruksi) > 10000
+                || ! isset(self::JENIS[$kegiatan->jenis])
+                || ! isset(self::STATUS[$kegiatan->status])
+                || $kegiatan->revisi < 1
+                || $kegiatan->revisi > 4294967295
+                || ! preg_match(
+                    '/\A[a-f0-9]{64}\z/',
+                    (string) $kegiatan->hash_permohonan
+                )
             ) {
-                throw new LogicException('Kegiatan harus valid dan ditulis melalui KelolaKegiatan.');
+                throw new LogicException(
+                    'Pembelajaran harus valid dan disimpan melalui KelolaKegiatan.'
+                );
             }
-            if (
-                ! $k->buka_at || ! $k->tenggat_at || ! $k->buka_at->lt($k->tenggat_at)
-                || $k->maks_berkas < 1 || $k->maks_berkas > 5 || $k->maks_ukuran_byte < 1048576 || $k->maks_ukuran_byte > 20971520
-                || ! is_array($k->ekstensi_diizinkan) || count($k->ekstensi_diizinkan) < 1
-                || array_diff($k->ekstensi_diizinkan, ['pdf', 'jpg', 'png']) !== []
-                || count(array_unique($k->ekstensi_diizinkan)) !== count($k->ekstensi_diizinkan)
-            ) {
-                throw new LogicException('Jadwal atau batas jawaban tidak valid.');
-            }
-            $valid = match ($k->status) {
-                self::DRAF => $k->terbit_at === null && $k->ditutup_at === null && $k->diarsipkan_at === null,
-                self::TERBIT => $k->terbit_at !== null && $k->ditutup_at === null && $k->diarsipkan_at === null,
-                self::DITUTUP => $k->terbit_at !== null && $k->ditutup_at !== null && $k->diarsipkan_at === null,
-                self::ARSIP => $k->diarsipkan_at !== null,
-            };
-            if (! $valid) {
-                throw new LogicException('Status dan waktu kegiatan tidak sesuai.');
-            }
-            if (! $k->exists) {
-                if ($k->status !== self::DRAF || $k->revisi !== 1) {
-                    throw new LogicException('Kegiatan baru harus draf, revisi satu.');
+
+            self::periksaAturanJenis($kegiatan);
+            self::periksaStatus($kegiatan);
+
+            if (! $kegiatan->exists) {
+                if (
+                    $kegiatan->status !== self::TERBIT
+                    || $kegiatan->terbit_at === null
+                    || $kegiatan->revisi !== 1
+                ) {
+                    throw new LogicException(
+                        'Pembelajaran baru harus langsung terbit dengan revisi pertama.'
+                    );
                 }
+
                 return;
             }
-            $asal = $k->getRawOriginal('status');
+
+            $statusLama = (string) $kegiatan->getRawOriginal(
+                'status'
+            );
+
             $transisi = [
-                self::DRAF => [self::DRAF, self::TERBIT, self::ARSIP],
-                self::TERBIT => [self::TERBIT, self::DITUTUP, self::ARSIP],
-                self::DITUTUP => [self::DITUTUP, self::TERBIT, self::ARSIP],
-                self::ARSIP => [self::DRAF, self::DITUTUP]
+                self::TERBIT => [
+                    self::TERBIT,
+                    self::DITUTUP,
+                    self::ARSIP,
+                ],
+                self::DITUTUP => [
+                    self::DITUTUP,
+                    self::TERBIT,
+                    self::ARSIP,
+                ],
+                self::ARSIP => [
+                    self::ARSIP,
+                    self::TERBIT,
+                ],
             ];
+
             if (
-                $k->isDirty(['kelas_kuliah_id', 'pembuat_id', 'form_token', 'hash_permohonan'])
-                || $k->revisi !== (int) $k->getRawOriginal('revisi') + 1
-                || ! in_array($k->status, $transisi[$asal] ?? [], true)
+                $kegiatan->isDirty([
+                    'kelas_kuliah_id',
+                    'pembuat_id',
+                    'form_token',
+                    'hash_permohonan',
+                    'terbit_at',
+                ])
+                || $kegiatan->revisi !==
+                    (int) $kegiatan->getRawOriginal('revisi') + 1
+                || ! in_array(
+                    $kegiatan->status,
+                    $transisi[$statusLama] ?? [],
+                    true
+                )
             ) {
-                throw new LogicException('Identitas tetap; revisi dan transisi harus sesuai.');
-            }
-            if ($k->getRawOriginal('terbit_at') !== null) {
-                if ($k->isDirty([...self::ISI_TETAP, 'terbit_at']) || $k->status === self::DRAF) {
-                    throw new LogicException('Isi dan aturan kegiatan dikunci sejak penerbitan pertama.');
-                }
-                if ($k->isDirty('tenggat_at') && ! $k->tenggat_at->gt(CarbonImmutable::parse($k->getRawOriginal('tenggat_at'), 'UTC'))) {
-                    throw new LogicException('Tenggat hanya boleh diperpanjang.');
-                }
-            } elseif (
-                ! ($asal === self::DRAF && $k->status === self::DRAF)
-                && $k->isDirty([...self::ISI_TETAP, 'tenggat_at'])
-            ) {
-                throw new LogicException('Ubah isi melalui edit draf sebelum menerbitkan.');
+                throw new LogicException(
+                    'Identitas pembelajaran, revisi, atau perubahan status tidak valid.'
+                );
             }
         });
+
         static::deleting(function (): never {
-            throw new LogicException('Gunakan arsip; kegiatan tidak dihapus.');
+            throw new LogicException(
+                'Pembelajaran tidak dihapus permanen. Gunakan arsip.'
+            );
         });
     }
+
+    private static function periksaAturanJenis(
+        self $kegiatan
+    ): void {
+        if ($kegiatan->jenis === self::MATERI) {
+            if (
+                $kegiatan->metode !== 'informasi'
+                || $kegiatan->tenggat_at !== null
+                || $kegiatan->maks_ukuran_byte !== null
+                || $kegiatan->maks_berkas !== null
+                || $kegiatan->ekstensi_diizinkan !== null
+            ) {
+                throw new LogicException(
+                    'Materi tidak menggunakan aturan pengumpulan jawaban.'
+                );
+            }
+
+            return;
+        }
+
+        if (
+            $kegiatan->metode !== 'pengumpulan_berkas'
+            || $kegiatan->buka_at === null
+            || $kegiatan->tenggat_at === null
+            || ! $kegiatan->buka_at->lt($kegiatan->tenggat_at)
+            || $kegiatan->maks_berkas < 1
+            || $kegiatan->maks_berkas > 10
+            || $kegiatan->maks_ukuran_byte < 1048576
+            || $kegiatan->maks_ukuran_byte > 52428800
+            || ! is_array($kegiatan->ekstensi_diizinkan)
+            || count($kegiatan->ekstensi_diizinkan) < 1
+            || array_diff(
+                $kegiatan->ekstensi_diizinkan,
+                self::EKSTENSI_JAWABAN
+            ) !== []
+            || count(array_unique(
+                $kegiatan->ekstensi_diizinkan
+            )) !== count($kegiatan->ekstensi_diizinkan)
+        ) {
+            throw new LogicException(
+                'Jadwal atau ketentuan pengumpulan tidak valid.'
+            );
+        }
+    }
+
+    private static function periksaStatus(
+        self $kegiatan
+    ): void {
+        $valid = match ($kegiatan->status) {
+            self::TERBIT =>
+                $kegiatan->terbit_at !== null
+                && $kegiatan->ditutup_at === null
+                && $kegiatan->diarsipkan_at === null,
+
+            self::DITUTUP =>
+                $kegiatan->terbit_at !== null
+                && $kegiatan->ditutup_at !== null
+                && $kegiatan->diarsipkan_at === null,
+
+            self::ARSIP =>
+                $kegiatan->terbit_at !== null
+                && $kegiatan->diarsipkan_at !== null,
+
+            default => false,
+        };
+
+        if (! $valid) {
+            throw new LogicException(
+                'Status dan waktu pembelajaran tidak sesuai.'
+            );
+        }
+    }
+
     public function kelasKuliah(): BelongsTo
     {
-        return $this->belongsTo(KelasKuliah::class, 'kelas_kuliah_id');
+        return $this->belongsTo(
+            KelasKuliah::class,
+            'kelas_kuliah_id'
+        );
     }
+
     public function pertemuan(): BelongsTo
     {
-        return $this->belongsTo(Pertemuan::class, 'pertemuan_id');
+        return $this->belongsTo(
+            Pertemuan::class,
+            'pertemuan_id'
+        );
     }
+
     public function pembuat(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'pembuat_id');
+        return $this->belongsTo(
+            User::class,
+            'pembuat_id'
+        );
     }
+
     public function lampiran(): HasMany
     {
-        return $this->hasMany(KegiatanBerkas::class, 'kegiatan_id')->where('aktif', true);
+        return $this->hasMany(
+            KegiatanBerkas::class,
+            'kegiatan_id'
+        )->where('aktif', true);
     }
+
     public function semuaLampiran(): HasMany
     {
-        return $this->hasMany(KegiatanBerkas::class, 'kegiatan_id');
+        return $this->hasMany(
+            KegiatanBerkas::class,
+            'kegiatan_id'
+        );
     }
+
+    public function pengumpulan(): HasMany
+    {
+        return $this->hasMany(
+            Pengumpulan::class,
+            'kegiatan_id'
+        );
+    }
+
     public function audits(): HasMany
     {
-        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'kegiatan');
+        return $this->hasMany(
+            AuditLog::class,
+            'entitas_id'
+        )->where('entitas', 'kegiatan');
     }
+
     public function versiForm(): string
     {
-        return hash_hmac('sha256', 'kegiatan:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+        return hash_hmac(
+            'sha256',
+            'kegiatan:' . $this->id . ':' . $this->revisi,
+            (string) config('app.key')
+        );
     }
-    // Ini hanya pemeriksaan status/waktu, BUKAN pengganti otorisasi peserta ketika pengumpulan dibuat.
-    public function jendelaTerbuka(?CarbonImmutable $waktu = null): bool
+
+    public function berupaMateri(): bool
     {
-        $waktu ??= CarbonImmutable::now('UTC');
-        return $this->status === self::TERBIT && $this->terbit_at !== null && $this->terbit_at->lte($waktu)
-            && $this->buka_at !== null && $this->tenggat_at !== null && $this->buka_at->lte($waktu) && $waktu->lt($this->tenggat_at);
+        return $this->jenis === self::MATERI;
     }
+
+    public function memerlukanPengumpulan(): bool
+    {
+        return ! $this->berupaMateri()
+            && $this->metode === 'pengumpulan_berkas';
+    }
+
+    public function dapatDilihat(
+        ?CarbonImmutable $waktu = null
+    ): bool {
+        $waktu ??= CarbonImmutable::now('UTC');
+
+        return $this->status !== self::ARSIP
+            && $this->terbit_at !== null
+            && $this->terbit_at->lte($waktu)
+            && (
+                $this->buka_at === null
+                || $this->buka_at->lte($waktu)
+            );
+    }
+
+    public function jendelaTerbuka(
+        ?CarbonImmutable $waktu = null
+    ): bool {
+        $waktu ??= CarbonImmutable::now('UTC');
+
+        return $this->memerlukanPengumpulan()
+            && $this->status === self::TERBIT
+            && $this->dapatDilihat($waktu)
+            && $this->buka_at !== null
+            && $this->tenggat_at !== null
+            && $this->buka_at->lte($waktu)
+            && $waktu->lt($this->tenggat_at);
+    }
+
     public function labelJadwal(): string
     {
-        if ($this->status === self::DRAF) {
-            return 'Draf';
-        }
         if ($this->status === self::ARSIP) {
             return 'Arsip';
         }
+
         if ($this->status === self::DITUTUP) {
             return 'Ditutup oleh pengajar';
         }
-        if (now('UTC')->lt($this->buka_at)) {
+
+        if ($this->berupaMateri()) {
+            return $this->dapatDilihat()
+                ? 'Tersedia'
+                : 'Belum tersedia';
+        }
+
+        if (
+            $this->buka_at !== null
+            && now('UTC')->lt($this->buka_at)
+        ) {
             return 'Belum mulai';
         }
-        return $this->jendelaTerbuka() ? 'Dalam jadwal pengumpulan' : 'Tenggat telah lewat';
+
+        return $this->jendelaTerbuka()
+            ? 'Dapat dikumpulkan'
+            : 'Tenggat telah lewat';
     }
+
     public function ringkasanAudit(): array
     {
         return [
@@ -177,20 +377,26 @@ class Kegiatan extends Model
                 'kelas_kuliah_id',
                 'pertemuan_id',
                 'pembuat_id',
-                ...self::ISI_TETAP,
+                'jenis',
+                'metode',
+                'judul',
+                'instruksi',
+                'tautan_eksternal',
+                'buka_at',
                 'tenggat_at',
+                'maks_ukuran_byte',
+                'maks_berkas',
+                'ekstensi_diizinkan',
                 'status',
                 'terbit_at',
                 'ditutup_at',
                 'diarsipkan_at',
-                'revisi'
+                'revisi',
             ]),
-            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+            'berkas_ids' => $this->lampiran()
+                ->orderBy('berkas_id')
+                ->pluck('berkas_id')
+                ->all(),
         ];
-    }
-
-    public function pengumpulan(): \Illuminate\Database\Eloquent\Relations\HasMany
-    {
-        return $this->hasMany(\App\Models\Pengumpulan::class, 'kegiatan_id');
     }
 }

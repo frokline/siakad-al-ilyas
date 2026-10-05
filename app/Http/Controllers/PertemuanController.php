@@ -29,7 +29,7 @@ class PertemuanController extends Controller
             'tanggal' => ['nullable', 'date_format:Y-m-d'],
             'page' => ['nullable', 'integer', 'min:1'],
         ]);
-        $query = Pertemuan::query()->with(['kelasKuliah.rombel.periodeAkademik', 'pengajarKelas.dosen.user']);
+        $query = Pertemuan::query()->with(['kelasKuliah.rombel.periodeAkademik']);
         $q = trim($filter['q'] ?? '');
         if ($q !== '') {
             $query->where(function (Builder $cari) use ($q): void {
@@ -98,7 +98,8 @@ class PertemuanController extends Controller
             'sesi' => $sesi,
             'filter' => $filter,
             'versi' => $kelas?->versiPertemuan(),
-            'boleh' => $kelas !== null && $sesi->konteksTerbuka() && $sesi->nomor <= 65535,
+            'boleh' => $kelas !== null && $sesi->konteksTerbuka() && $sesi->nomor <= 65535
+                && $kelas->pengajarKelas->where('aktif', true)->isNotEmpty(),
             'daftarKelas' => $calon->orderByDesc('id')->paginate(12, ['*'], 'kelas_page')->withQueryString(),
             'daftarPeriode' => PeriodeAkademik::query()->whereIn('status', Rombel::STATUS_PERIODE_TERBUKA)->orderByDesc('mulai')->get(),
         ]);

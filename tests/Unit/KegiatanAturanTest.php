@@ -35,6 +35,8 @@ class KegiatanAturanTest extends TestCase
     {
         $k = new Kegiatan();
         $k->status = Kegiatan::TERBIT;
+        $k->jenis = Kegiatan::TUGAS;
+        $k->metode = 'pengumpulan_berkas';
         $k->terbit_at = '2030-01-09 02:00:00';
         $k->buka_at = '2030-01-10 02:00:00';
         $k->tenggat_at = '2030-01-10 04:00:00';

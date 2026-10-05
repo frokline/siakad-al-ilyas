@@ -71,6 +71,11 @@ class AppServiceProvider extends ServiceProvider
             fn(User $user): bool => $user->hasRole(Role::ADMIN_AKADEMIK)
         );
 
+        Gate::define(
+            'kelola-rombel',
+            fn(User $user): bool => $user->hasRole(Role::ADMIN_AKADEMIK)
+        );
+
         \Illuminate\Support\Facades\Gate::define(
             'kelola-registrasi-semester',
             static fn(\App\Models\User $user): bool =>
@@ -169,6 +174,22 @@ class AppServiceProvider extends ServiceProvider
                 Limit::perMinute(5)->by(
                     'admin-login:identity:' . hash('sha256', $login),
                 ),
+            ];
+        });
+
+        RateLimiter::for('portal-login', function (Request $request): array {
+            $input = $request->input('login', $request->input('username'));
+
+            $identitas = is_string($input)
+                ? Str::lower(trim(Str::limit($input, 190, '')))
+                : '';
+
+            $ipHash = hash('sha256', (string) $request->ip());
+            $identitasHash = hash('sha256', $identitas . '|' . $ipHash);
+
+            return [
+                Limit::perMinute(30)->by('portal-login:ip:' . $ipHash),
+                Limit::perMinute(5)->by('portal-login:akun:' . $identitasHash),
             ];
         });
 

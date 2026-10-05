@@ -127,8 +127,8 @@ class PeriodeAkademik extends Model
 
         $now = $at ?? CarbonImmutable::now('UTC');
 
-        return $now->greaterThanOrEqual($this->krs_mulai)
-            && $now->lessThanOrEqual($this->krs_selesai);
+        return $now->gte($this->krs_mulai)
+            && $now->lte($this->krs_selesai);
     }
 
     public function rombel(): HasMany

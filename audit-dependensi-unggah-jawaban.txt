@@ -1,0 +1,1301 @@
+
+
+====================================================================================================
+FILE: .\app\Models\Berkas.php
+====================================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+use LogicException;
+
+class Berkas extends Model
+{
+    public const MENUNGGU = 'menunggu';
+    public const TERSEDIA = 'tersedia';
+    public const DITOLAK = 'ditolak';
+    public const DIHAPUS = 'dihapus';
+    public const STATUS = [
+        self::MENUNGGU => 'Sedang diproses',
+        self::TERSEDIA => 'Tersedia',
+        self::DITOLAK => 'Gagal diproses',
+        self::DIHAPUS => 'Dinonaktifkan'
+    ];
+    public const IDENTITAS = [
+        'diunggah_oleh',
+        'upload_token',
+        'storage_disk',
+        'object_key',
+        'nama_asli',
+        'mime_type',
+        'ekstensi',
+        'ukuran_byte',
+        'sha256',
+        'pemeriksaan',
+        'diperiksa_at'
+    ];
+    protected $table = 'berkas';
+    protected $guarded = ['*'];
+    protected $hidden = ['storage_disk', 'object_key', 'upload_token'];
+
+    protected function casts(): array
+    {
+        return [
+            'diunggah_oleh' => 'integer',
+            'ukuran_byte' => 'integer',
+            'revisi' => 'integer',
+            'diperiksa_at' => 'immutable_datetime',
+            'tersedia_at' => 'immutable_datetime',
+            'dinonaktifkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $file): void {
+            if (
+                DB::transactionLevel() < 1 || ! isset(self::STATUS[$file->status]) || $file->ukuran_byte < 1
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $file->sha256) || blank($file->label)
+            ) {
+                throw new LogicException('Metadata berkas wajib lengkap dan disimpan melalui transaksi.');
+            }
+            if (! $file->exists) {
+                if ($file->status !== self::MENUNGGU || $file->revisi !== 1) {
+                    throw new LogicException('Berkas baru harus menunggu, revisi 1.');
+                }
+            } else {
+                $asal = $file->getRawOriginal('status');
+                $tujuan = [
+                    self::MENUNGGU => [self::TERSEDIA, self::DITOLAK],
+                    self::TERSEDIA => [self::TERSEDIA, self::DIHAPUS],
+                    self::DIHAPUS => [self::TERSEDIA],
+                    self::DITOLAK => []
+                ];
+                if (
+                    $file->isDirty(self::IDENTITAS) || ! in_array($file->status, $tujuan[$asal] ?? [], true)
+                    || $file->revisi !== (int) $file->getRawOriginal('revisi') + 1
+                    || ($asal === self::TERSEDIA && $file->status === self::TERSEDIA && ! $file->isDirty(['label', 'keterangan']))
+                ) {
+                    throw new LogicException('Identitas berkas tetap; perubahan/transisi harus sah dan menaikkan revisi.');
+                }
+                if ($asal !== self::MENUNGGU && $file->isDirty('tersedia_at')) {
+                    throw new LogicException('Waktu ketersediaan pertama tidak boleh diubah.');
+                }
+            }
+            $siap = in_array($file->status, [self::TERSEDIA, self::DIHAPUS], true);
+            if ($siap !== ($file->tersedia_at !== null) || ($file->status === self::DIHAPUS) !== ($file->dinonaktifkan_at !== null)) {
+                throw new LogicException('Status dan waktu berkas tidak sesuai.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Berkas tidak dihapus fisik melalui model. Gunakan nonaktifkan.');
+        });
+    }
+    public function pengunggah(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'diunggah_oleh');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'berkas');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'berkas:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function labelStatus(): string
+    {
+        return self::STATUS[$this->status];
+    }
+    public function ukuranLabel(): string
+    {
+        return number_format($this->ukuran_byte / 1048576, 2, ',', '.') . ' MB';
+    }
+    public function ringkasanAudit(): array
+    {
+        return $this->only([
+            'diunggah_oleh',
+            'nama_asli',
+            'label',
+            'keterangan',
+            'mime_type',
+            'ekstensi',
+            'ukuran_byte',
+            'sha256',
+            'pemeriksaan',
+            'diperiksa_at',
+            'status',
+            'pesan_status',
+            'tersedia_at',
+            'dinonaktifkan_at',
+            'revisi'
+        ]);
+    }
+
+    public function materiLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\MateriBerkas::class, 'berkas_id');
+    }
+
+    public function kegiatanLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\KegiatanBerkas::class, 'berkas_id');
+    }
+
+    public function pengumpulanLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PengumpulanBerkas::class, 'berkas_id');
+    }
+
+    public function pembayaran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\Pembayaran::class, 'bukti_berkas_id');
+    }
+    public function lampiranPermohonanSurat(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PermohonanSurat::class, 'lampiran_berkas_id');
+    }
+    public function hasilPermohonanSurat(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PermohonanSurat::class, 'hasil_berkas_id');
+    }
+}
+
+
+
+====================================================================================================
+FILE: .\app\Models\Kegiatan.php
+====================================================================================================
+<?php
+
+namespace App\Models;
+
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
+
+class Kegiatan extends Model
+{
+    public const MATERI = 'materi';
+    public const TUGAS = 'tugas';
+    public const LATIHAN = 'latihan';
+    public const UTS = 'uts';
+    public const UAS = 'uas';
+
+    public const TERBIT = 'terbit';
+    public const DITUTUP = 'ditutup';
+    public const ARSIP = 'arsip';
+
+    public const JENIS = [
+        self::MATERI => 'Materi',
+        self::TUGAS => 'Tugas',
+        self::LATIHAN => 'Latihan',
+        self::UTS => 'UTS',
+        self::UAS => 'UAS',
+    ];
+
+    public const STATUS = [
+        self::TERBIT => 'Terbit',
+        self::DITUTUP => 'Ditutup',
+        self::ARSIP => 'Arsip',
+    ];
+
+    public const EKSTENSI_JAWABAN = [
+        'pdf',
+        'jpg',
+        'png',
+        'doc',
+        'docx',
+        'xls',
+        'xlsx',
+        'ppt',
+        'pptx',
+        'zip',
+    ];
+
+    protected $table = 'kegiatan';
+
+    protected $guarded = ['*'];
+
+    protected $hidden = [
+        'form_token',
+        'hash_permohonan',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kelas_kuliah_id' => 'integer',
+            'pertemuan_id' => 'integer',
+            'pembuat_id' => 'integer',
+            'maks_ukuran_byte' => 'integer',
+            'maks_berkas' => 'integer',
+            'ekstensi_diizinkan' => 'array',
+            'revisi' => 'integer',
+            'buka_at' => 'immutable_datetime',
+            'tenggat_at' => 'immutable_datetime',
+            'terbit_at' => 'immutable_datetime',
+            'ditutup_at' => 'immutable_datetime',
+            'diarsipkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime',
+        ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $kegiatan): void {
+            if (
+                $kegiatan->getConnection()->transactionLevel() < 1
+                || blank($kegiatan->judul)
+                || mb_strlen($kegiatan->judul) > 200
+                || mb_strlen((string) $kegiatan->instruksi) > 10000
+                || ! isset(self::JENIS[$kegiatan->jenis])
+                || ! isset(self::STATUS[$kegiatan->status])
+                || $kegiatan->revisi < 1
+                || $kegiatan->revisi > 4294967295
+                || ! preg_match(
+                    '/\A[a-f0-9]{64}\z/',
+                    (string) $kegiatan->hash_permohonan
+                )
+            ) {
+                throw new LogicException(
+                    'Pembelajaran harus valid dan disimpan melalui KelolaKegiatan.'
+                );
+            }
+
+            self::periksaAturanJenis($kegiatan);
+            self::periksaStatus($kegiatan);
+
+            if (! $kegiatan->exists) {
+                if (
+                    $kegiatan->status !== self::TERBIT
+                    || $kegiatan->terbit_at === null
+                    || $kegiatan->revisi !== 1
+                ) {
+                    throw new LogicException(
+                        'Pembelajaran baru harus langsung terbit dengan revisi pertama.'
+                    );
+                }
+
+                return;
+            }
+
+            $statusLama = (string) $kegiatan->getRawOriginal(
+                'status'
+            );
+
+            $transisi = [
+                self::TERBIT => [
+                    self::TERBIT,
+                    self::DITUTUP,
+                    self::ARSIP,
+                ],
+                self::DITUTUP => [
+                    self::DITUTUP,
+                    self::TERBIT,
+                    self::ARSIP,
+                ],
+                self::ARSIP => [
+                    self::ARSIP,
+                    self::TERBIT,
+                ],
+            ];
+
+            if (
+                $kegiatan->isDirty([
+                    'kelas_kuliah_id',
+                    'pembuat_id',
+                    'form_token',
+                    'hash_permohonan',
+                    'terbit_at',
+                ])
+                || $kegiatan->revisi !==
+                    (int) $kegiatan->getRawOriginal('revisi') + 1
+                || ! in_array(
+                    $kegiatan->status,
+                    $transisi[$statusLama] ?? [],
+                    true
+                )
+            ) {
+                throw new LogicException(
+                    'Identitas pembelajaran, revisi, atau perubahan status tidak valid.'
+                );
+            }
+        });
+
+        static::deleting(function (): never {
+            throw new LogicException(
+                'Pembelajaran tidak dihapus permanen. Gunakan arsip.'
+            );
+        });
+    }
+
+    private static function periksaAturanJenis(
+        self $kegiatan
+    ): void {
+        if ($kegiatan->jenis === self::MATERI) {
+            if (
+                $kegiatan->metode !== 'informasi'
+                || $kegiatan->tenggat_at !== null
+                || $kegiatan->maks_ukuran_byte !== null
+                || $kegiatan->maks_berkas !== null
+                || $kegiatan->ekstensi_diizinkan !== null
+            ) {
+                throw new LogicException(
+                    'Materi tidak menggunakan aturan pengumpulan jawaban.'
+                );
+            }
+
+            return;
+        }
+
+        if (
+            $kegiatan->metode !== 'pengumpulan_berkas'
+            || $kegiatan->buka_at === null
+            || $kegiatan->tenggat_at === null
+            || ! $kegiatan->buka_at->lt($kegiatan->tenggat_at)
+            || $kegiatan->maks_berkas < 1
+            || $kegiatan->maks_berkas > 10
+            || $kegiatan->maks_ukuran_byte < 1048576
+            || $kegiatan->maks_ukuran_byte > 52428800
+            || ! is_array($kegiatan->ekstensi_diizinkan)
+            || count($kegiatan->ekstensi_diizinkan) < 1
+            || array_diff(
+                $kegiatan->ekstensi_diizinkan,
+                self::EKSTENSI_JAWABAN
+            ) !== []
+            || count(array_unique(
+                $kegiatan->ekstensi_diizinkan
+            )) !== count($kegiatan->ekstensi_diizinkan)
+        ) {
+            throw new LogicException(
+                'Jadwal atau ketentuan pengumpulan tidak valid.'
+            );
+        }
+    }
+
+    private static function periksaStatus(
+        self $kegiatan
+    ): void {
+        $valid = match ($kegiatan->status) {
+            self::TERBIT =>
+                $kegiatan->terbit_at !== null
+                && $kegiatan->ditutup_at === null
+                && $kegiatan->diarsipkan_at === null,
+
+            self::DITUTUP =>
+                $kegiatan->terbit_at !== null
+                && $kegiatan->ditutup_at !== null
+                && $kegiatan->diarsipkan_at === null,
+
+            self::ARSIP =>
+                $kegiatan->terbit_at !== null
+                && $kegiatan->diarsipkan_at !== null,
+
+            default => false,
+        };
+
+        if (! $valid) {
+            throw new LogicException(
+                'Status dan waktu pembelajaran tidak sesuai.'
+            );
+        }
+    }
+
+    public function kelasKuliah(): BelongsTo
+    {
+        return $this->belongsTo(
+            KelasKuliah::class,
+            'kelas_kuliah_id'
+        );
+    }
+
+    public function pertemuan(): BelongsTo
+    {
+        return $this->belongsTo(
+            Pertemuan::class,
+            'pertemuan_id'
+        );
+    }
+
+    public function pembuat(): BelongsTo
+    {
+        return $this->belongsTo(
+            User::class,
+            'pembuat_id'
+        );
+    }
+
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(
+            KegiatanBerkas::class,
+            'kegiatan_id'
+        )->where('aktif', true);
+    }
+
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(
+            KegiatanBerkas::class,
+            'kegiatan_id'
+        );
+    }
+
+    public function pengumpulan(): HasMany
+    {
+        return $this->hasMany(
+            Pengumpulan::class,
+            'kegiatan_id'
+        );
+    }
+
+    public function audits(): HasMany
+    {
+        return $this->hasMany(
+            AuditLog::class,
+            'entitas_id'
+        )->where('entitas', 'kegiatan');
+    }
+
+    public function versiForm(): string
+    {
+        return hash_hmac(
+            'sha256',
+            'kegiatan:' . $this->id . ':' . $this->revisi,
+            (string) config('app.key')
+        );
+    }
+
+    public function berupaMateri(): bool
+    {
+        return $this->jenis === self::MATERI;
+    }
+
+    public function memerlukanPengumpulan(): bool
+    {
+        return ! $this->berupaMateri()
+            && $this->metode === 'pengumpulan_berkas';
+    }
+
+    public function dapatDilihat(
+        ?CarbonImmutable $waktu = null
+    ): bool {
+        $waktu ??= CarbonImmutable::now('UTC');
+
+        return $this->status !== self::ARSIP
+            && $this->terbit_at !== null
+            && $this->terbit_at->lte($waktu)
+            && (
+                $this->buka_at === null
+                || $this->buka_at->lte($waktu)
+            );
+    }
+
+    public function jendelaTerbuka(
+        ?CarbonImmutable $waktu = null
+    ): bool {
+        $waktu ??= CarbonImmutable::now('UTC');
+
+        return $this->memerlukanPengumpulan()
+            && $this->status === self::TERBIT
+            && $this->dapatDilihat($waktu)
+            && $this->buka_at !== null
+            && $this->tenggat_at !== null
+            && $this->buka_at->lte($waktu)
+            && $waktu->lt($this->tenggat_at);
+    }
+
+    public function labelJadwal(): string
+    {
+        if ($this->status === self::ARSIP) {
+            return 'Arsip';
+        }
+
+        if ($this->status === self::DITUTUP) {
+            return 'Ditutup oleh pengajar';
+        }
+
+        if ($this->berupaMateri()) {
+            return $this->dapatDilihat()
+                ? 'Tersedia'
+                : 'Belum tersedia';
+        }
+
+        if (
+            $this->buka_at !== null
+            && now('UTC')->lt($this->buka_at)
+        ) {
+            return 'Belum mulai';
+        }
+
+        return $this->jendelaTerbuka()
+            ? 'Dapat dikumpulkan'
+            : 'Tenggat telah lewat';
+    }
+
+    public function ringkasanAudit(): array
+    {
+        return [
+            ...$this->only([
+                'kelas_kuliah_id',
+                'pertemuan_id',
+                'pembuat_id',
+                'jenis',
+                'metode',
+                'judul',
+                'instruksi',
+                'tautan_eksternal',
+                'buka_at',
+                'tenggat_at',
+                'maks_ukuran_byte',
+                'maks_berkas',
+                'ekstensi_diizinkan',
+                'status',
+                'terbit_at',
+                'ditutup_at',
+                'diarsipkan_at',
+                'revisi',
+            ]),
+            'berkas_ids' => $this->lampiran()
+                ->orderBy('berkas_id')
+                ->pluck('berkas_id')
+                ->all(),
+        ];
+    }
+}
+
+
+====================================================================================================
+FILE: .\app\Services\AturanJawaban.php
+====================================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\Berkas;
+use App\Models\Kegiatan;
+use Illuminate\Validation\ValidationException;
+
+final class AturanJawaban
+{
+    private const MIME = [
+        'pdf' => ['application/pdf'],
+        'jpg' => ['image/jpeg'],
+        'png' => ['image/png'],
+        'doc' => ['application/msword'],
+        'docx' => [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ],
+        'xls' => ['application/vnd.ms-excel'],
+        'xlsx' => [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ],
+        'ppt' => ['application/vnd.ms-powerpoint'],
+        'pptx' => [
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ],
+        'zip' => [
+            'application/zip',
+            'application/x-zip-compressed',
+            'multipart/x-zip',
+        ],
+    ];
+
+    public static function teks(mixed $input): ?string
+    {
+        if ($input === null) {
+            return null;
+        }
+
+        if (
+            ! is_string($input)
+            || ! mb_check_encoding($input, 'UTF-8')
+        ) {
+            self::gagal('Pesan jawaban tidak valid.');
+        }
+
+        $teks = trim(
+            str_replace(["\r\n", "\r"], "\n", $input)
+        );
+
+        $maks = max(
+            1,
+            min(
+                10000,
+                (int) config(
+                    'pengumpulan.maks_karakter_jawaban',
+                    10000
+                )
+            )
+        );
+
+        if (
+            mb_strlen($teks) > $maks
+            || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $teks)
+        ) {
+            self::gagal(
+                'Pesan terlalu panjang atau mengandung karakter yang tidak diizinkan.'
+            );
+        }
+
+        return $teks === '' ? null : $teks;
+    }
+
+    public static function ids(array $ids): array
+    {
+        if (count($ids) > 5) {
+            self::gagal(
+                'Maksimal lima berkas. Batas tugas dapat lebih kecil.'
+            );
+        }
+
+        $hasil = [];
+
+        foreach ($ids as $id) {
+            if (
+                ! is_scalar($id)
+                || ! preg_match(
+                    '/\A[1-9][0-9]{0,17}\z/',
+                    (string) $id
+                )
+            ) {
+                self::gagal('ID berkas tidak valid.');
+            }
+
+            $hasil[] = (int) $id;
+        }
+
+        if (count(array_unique($hasil)) !== count($hasil)) {
+            self::gagal('Berkas tidak boleh dipilih lebih dari satu kali.');
+        }
+
+        sort($hasil, SORT_NUMERIC);
+
+        return $hasil;
+    }
+
+    public static function berkas(
+        Berkas $berkas,
+        Kegiatan $kegiatan,
+        int $pemilikId
+    ): void {
+        $mimeSesuai = in_array(
+            $berkas->mime_type,
+            self::MIME[$berkas->ekstensi] ?? [],
+            true
+        );
+
+        if (
+            $berkas->diunggah_oleh !== $pemilikId
+            || $berkas->status !== Berkas::TERSEDIA
+            || $berkas->ukuran_byte < 1
+            || $berkas->ukuran_byte > $kegiatan->maks_ukuran_byte
+            || ! in_array(
+                $berkas->ekstensi,
+                $kegiatan->ekstensi_diizinkan,
+                true
+            )
+            || ! $mimeSesuai
+            || ! preg_match(
+                '/\A[a-f0-9]{64}\z/',
+                (string) $berkas->sha256
+            )
+            || (
+                ! app()->environment(['local', 'testing'])
+                && $berkas->pemeriksaan !== 'clamav'
+            )
+        ) {
+            self::gagal(
+                'Berkas tidak tersedia, bukan milik Anda, belum dipindai, atau tidak sesuai ketentuan tugas.'
+            );
+        }
+    }
+
+    public static function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages([
+            'pengumpulan' => $pesan,
+        ]);
+    }
+}
+
+
+====================================================================================================
+FILE: .\app\Services\PemeriksaBerkas.php
+====================================================================================================
+<?php
+
+namespace App\Services;
+
+use Illuminate\Http\UploadedFile;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\Process\Process;
+
+final class PemeriksaBerkas
+{
+    private const TIPE = [
+        'pdf' => ['application/pdf'],
+        'jpg' => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png' => ['image/png'],
+        'doc' => ['application/msword'],
+        'docx' => [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ],
+        'xls' => ['application/vnd.ms-excel'],
+        'xlsx' => [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ],
+        'ppt' => ['application/vnd.ms-powerpoint'],
+        'pptx' => [
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ],
+        'zip' => [
+            'application/zip',
+            'application/x-zip-compressed',
+            'multipart/x-zip',
+        ],
+    ];
+
+    public function periksa(UploadedFile $file): array
+    {
+        if (
+            ! $file->isValid()
+            || $file->getSize() < 1
+            || $file->getSize() > (int) config('berkas.maks_kib') * 1024
+        ) {
+            $this->gagal(
+                'Unggahan harus berisi data dan berukuran paling besar 20 MB.'
+            );
+        }
+
+        $ext = strtolower($file->getClientOriginalExtension());
+        $mime = $file->getMimeType();
+
+        if (
+            ! isset(self::TIPE[$ext])
+            || ! in_array($mime, self::TIPE[$ext], true)
+        ) {
+            $this->gagal(
+                'Format berkas tidak diizinkan atau isi berkas tidak sesuai ekstensinya.'
+            );
+        }
+
+        $path = $file->getRealPath();
+
+        if (! is_string($path) || $path === '') {
+            $this->gagal('Berkas sementara tidak dapat dibaca.');
+        }
+
+        $this->pastikanFormatSesuai($path, $ext, $mime);
+
+        $scanner = (string) config('berkas.scanner');
+
+        if (
+            ! app()->environment(['local', 'testing'])
+            && $scanner !== 'clamav'
+        ) {
+            $this->gagal(
+                'Pemindai berkas belum dikonfigurasi. Hubungi pengelola sistem.'
+            );
+        }
+
+        if ($scanner === 'clamav') {
+            try {
+                $process = new Process([
+                    (string) config('berkas.clamscan'),
+                    '--no-summary',
+                    '--',
+                    $path,
+                ]);
+
+                $process
+                    ->setTimeout((int) config('berkas.scanner_timeout'))
+                    ->run();
+
+                $code = $process->getExitCode();
+            } catch (\Throwable) {
+                $this->gagal(
+                    'Pemindaian tidak selesai. Coba lagi atau hubungi pengelola.'
+                );
+            }
+
+            if ($code === 1) {
+                $this->gagal('Berkas ditolak oleh pemindai.');
+            }
+
+            if ($code !== 0) {
+                $this->gagal(
+                    'Pemindai belum siap. Unggahan tidak disimpan.'
+                );
+            }
+        } elseif ($scanner !== 'none') {
+            $this->gagal('Konfigurasi pemindai tidak dikenali.');
+        }
+
+        $nama = basename(
+            str_replace('\\', '/', $file->getClientOriginalName())
+        );
+
+        $nama = preg_replace('/[\x00-\x1F\x7F]/u', '', $nama)
+            ?: 'berkas.' . $ext;
+
+        $hash = hash_file('sha256', $path);
+
+        if ($hash === false) {
+            $this->gagal(
+                'Berkas sementara tidak dapat diperiksa.'
+            );
+        }
+
+        return [
+            'nama_asli' => mb_substr($nama, 0, 255),
+            'mime_type' => $mime,
+            'ekstensi' => $ext === 'jpeg' ? 'jpg' : $ext,
+            'ukuran_byte' => (int) $file->getSize(),
+            'sha256' => $hash,
+            'pemeriksaan' => $scanner === 'clamav'
+                ? 'clamav'
+                : 'format',
+        ];
+    }
+
+    private function pastikanFormatSesuai(
+        string $path,
+        string $ext,
+        string $mime
+    ): void {
+        if ($ext === 'pdf') {
+            $awal = file_get_contents($path, false, null, 0, 5);
+
+            if ($awal !== '%PDF-') {
+                $this->gagal('Header PDF tidak sesuai.');
+            }
+
+            return;
+        }
+
+        if (in_array($ext, ['jpg', 'jpeg', 'png'], true)) {
+            $gambar = @getimagesize($path);
+
+            if (
+                ! is_array($gambar)
+                || ($gambar['mime'] ?? '') !== $mime
+                || $gambar[0] < 1
+                || $gambar[1] < 1
+                || $gambar[0] * $gambar[1]
+                    > (int) config('berkas.maks_piksel')
+            ) {
+                $this->gagal(
+                    'Gambar tidak valid atau dimensinya terlalu besar.'
+                );
+            }
+
+            return;
+        }
+
+        if (in_array($ext, ['doc', 'xls', 'ppt'], true)) {
+            $awal = file_get_contents($path, false, null, 0, 8);
+
+            if ($awal !== hex2bin('D0CF11E0A1B11AE1')) {
+                $this->gagal(
+                    'Berkas Office lama tidak memiliki struktur yang sesuai.'
+                );
+            }
+
+            return;
+        }
+
+        if (
+            in_array($ext, ['docx', 'xlsx', 'pptx'], true)
+            && ! $this->arsipOfficeSesuai($path, $ext)
+        ) {
+            $this->gagal(
+                'Berkas Office tidak memiliki struktur yang sesuai.'
+            );
+        }
+
+        if ($ext === 'zip' && ! $this->arsipZipSesuai($path)) {
+            $this->gagal('Berkas ZIP tidak memiliki struktur yang sesuai.');
+        }
+    }
+
+    private function arsipOfficeSesuai(
+        string $path,
+        string $ext
+    ): bool {
+        $folder = [
+            'docx' => 'word/',
+            'xlsx' => 'xl/',
+            'pptx' => 'ppt/',
+        ][$ext];
+
+        return $this->arsipMemiliki(
+            $path,
+            static function (\ZipArchive $zip) use ($folder): bool {
+                if ($zip->locateName('[Content_Types].xml') === false) {
+                    return false;
+                }
+
+                for ($nomor = 0; $nomor < $zip->numFiles; $nomor++) {
+                    $nama = $zip->getNameIndex($nomor);
+
+                    if (
+                        is_string($nama)
+                        && str_starts_with($nama, $folder)
+                    ) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        );
+    }
+
+    private function arsipZipSesuai(string $path): bool
+    {
+        return $this->arsipMemiliki(
+            $path,
+            static function (\ZipArchive $zip): bool {
+                return $zip->numFiles >= 0;
+            }
+        );
+    }
+
+    private function arsipMemiliki(
+        string $path,
+        callable $pemeriksa
+    ): bool {
+        if (! class_exists(\ZipArchive::class)) {
+            $this->gagal(
+                'Ekstensi PHP ZIP belum aktif. Hubungi pengelola sistem.'
+            );
+        }
+
+        $zip = new \ZipArchive();
+        $hasil = $zip->open($path);
+
+        if ($hasil !== true) {
+            return false;
+        }
+
+        try {
+            return (bool) $pemeriksa($zip);
+        } finally {
+            $zip->close();
+        }
+    }
+
+    private function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages([
+            'file' => $pesan,
+        ]);
+    }
+}
+
+
+====================================================================================================
+FILE: .\app\Services\PenyimpananBerkas.php
+====================================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\Berkas;
+use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Support\Facades\Storage;
+use RuntimeException;
+
+final class PenyimpananBerkas
+{
+    public function diskBaru(): string
+    {
+        $nama = (string) config('berkas.disk');
+        if (
+            ! in_array($nama, config('berkas.disk_diizinkan'), true)
+            || (! app()->environment(['local', 'testing']) && $nama !== 'berkas_s3')
+        ) {
+            throw new RuntimeException('Penyimpanan privat belum dikonfigurasi.');
+        }
+        return $nama;
+    }
+    public function disk(Berkas $file): Filesystem
+    {
+        if (
+            ! in_array($file->storage_disk, config('berkas.disk_diizinkan'), true)
+            || ! preg_match('~\Asiakad/berkas/[0-9]{4}/[0-9]{2}/[a-f0-9-]{36}\.(pdf|jpg|png)\z~', $file->object_key)
+        ) {
+            throw new RuntimeException('Lokasi berkas tidak sesuai konfigurasi.');
+        }
+        return Storage::disk($file->storage_disk);
+    }
+    public function tulis(Berkas $file, string $path): void
+    {
+        $stream = fopen($path, 'rb');
+        if (! is_resource($stream)) {
+            throw new RuntimeException('Berkas sementara tidak dapat dibaca.');
+        }
+        try {
+            // Objek memakai UUID baru; tidak ada penggantian isi pada objek yang tersedia.
+            if (! $this->disk($file)->put($file->object_key, $stream, ['visibility' => 'private', 'ContentType' => $file->mime_type])) {
+                throw new RuntimeException('Penyimpanan tidak menyelesaikan unggahan.');
+            }
+            if ($this->disk($file)->size($file->object_key) !== $file->ukuran_byte) {
+                throw new RuntimeException('Ukuran objek tidak sesuai.');
+            }
+        } finally {
+            fclose($stream);
+        }
+    }
+    public function buka(Berkas $file): mixed
+    {
+        if (! app()->environment(['local', 'testing']) && $file->pemeriksaan !== 'clamav') {
+            throw new RuntimeException('Berkas ini belum melalui pemindaian produksi.');
+        }
+        if ($this->disk($file)->size($file->object_key) !== $file->ukuran_byte) {
+            throw new RuntimeException('Objek tidak tersedia atau ukurannya berubah.');
+        }
+        $stream = $this->disk($file)->readStream($file->object_key);
+        if (! is_resource($stream)) {
+            throw new RuntimeException('Objek tidak dapat dibaca.');
+        }
+        $salinan = fopen('php://temp/maxmemory:2097152', 'w+b');
+        if (! is_resource($salinan)) {
+            fclose($stream);
+            throw new RuntimeException('Berkas sementara tidak dapat dibuat.');
+        }
+        // Verifikasi sebelum mengirim satu byte pun ke browser. Memori maksimal 2 MB;
+        // sisanya menggunakan file sementara PHP, untuk batas unggahan 20 MB.
+        try {
+            $hash = hash_init('sha256');
+            $jumlah = 0;
+            while (! feof($stream)) {
+                $bagian = fread($stream, 1048576);
+                if ($bagian === false || ($bagian === '' && ! feof($stream))) {
+                    throw new RuntimeException('Pembacaan objek terputus.');
+                }
+                $jumlah += strlen($bagian);
+                if ($jumlah > $file->ukuran_byte) {
+                    throw new RuntimeException('Ukuran objek melebihi metadata.');
+                }
+                hash_update($hash, $bagian);
+                if (fwrite($salinan, $bagian) !== strlen($bagian)) {
+                    throw new RuntimeException('Berkas sementara tidak dapat ditulis.');
+                }
+            }
+            if ($jumlah !== $file->ukuran_byte || ! hash_equals($file->sha256, hash_final($hash))) {
+                throw new RuntimeException('Integritas objek tidak sesuai.');
+            }
+            rewind($salinan);
+            return $salinan;
+        } catch (\Throwable $error) {
+            fclose($salinan);
+            throw $error;
+        } finally {
+            fclose($stream);
+        }
+    }
+}
+
+
+
+====================================================================================================
+FILE: .\app\Actions\KelolaBerkas.php
+====================================================================================================
+<?php
+
+namespace App\Actions;
+
+use App\Models\Berkas;
+use App\Models\User;
+use App\Services\AksesBerkas;
+use App\Services\LogBerkas;
+use App\Services\PemeriksaBerkas;
+use App\Services\PenyimpananBerkas;
+use App\Services\ReferensiBerkas;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+
+final class KelolaBerkas
+{
+    public function __construct(
+        private readonly PemeriksaBerkas $pemeriksa,
+        private readonly PenyimpananBerkas $storage,
+        private readonly AksesBerkas $akses,
+        private readonly LogBerkas $audit,
+        private readonly ReferensiBerkas $referensi
+    ) {}
+
+    public function unggah(int $userId, UploadedFile $upload, array $data): Berkas
+    {
+        $user = User::query()->findOrFail($userId);
+        Gate::forUser($user)->authorize('create', Berkas::class);
+        $info = $this->pemeriksa->periksa($upload);
+        try {
+            $disk = $this->storage->diskBaru();
+        } catch (\RuntimeException) {
+            $this->gagal('Penyimpanan privat belum dikonfigurasi. Hubungi pengelola.');
+        }
+        [$file, $baru] = DB::transaction(function () use ($userId, $info, $data, $disk): array {
+            $user = $this->kunciUser($userId);
+            $ada = Berkas::query()->where('diunggah_oleh', $userId)->where('upload_token', $data['upload_token'])
+                ->lockForUpdate()->first();
+            if ($ada !== null) {
+                if (
+                    ! hash_equals($ada->sha256, $info['sha256']) || $ada->ukuran_byte !== $info['ukuran_byte']
+                    || $ada->nama_asli !== $info['nama_asli'] || $ada->mime_type !== $info['mime_type']
+                    || $ada->label !== $data['label'] || $ada->keterangan !== ($data['keterangan'] ?? null)
+                ) {
+                    $this->gagal('Formulir unggahan ini sudah digunakan untuk data berbeda. Buka halaman unggah baru.');
+                }
+                return [$ada, false];
+            }
+            // Kuota menghitung semua reservasi, termasuk objek yang dinonaktifkan/gagal.
+            // Objek tersebut belum dihapus fisik; jangan membuat kuota seolah sudah bebas.
+            $terpakai = (int) Berkas::query()->where('diunggah_oleh', $userId)->sum('ukuran_byte');
+            if ($terpakai + $info['ukuran_byte'] > (int) config('berkas.kuota_byte')) {
+                $this->gagal('Kuota penyimpanan akun tidak mencukupi. Hubungi pengelola sistem.');
+            }
+            $file = new Berkas();
+            $file->diunggah_oleh = $user->id;
+            $file->upload_token = $data['upload_token'];
+            $file->storage_disk = $disk;
+            $file->object_key = 'siakad/berkas/' . now('UTC')->format('Y/m') . '/' . Str::uuid() . '.' . $info['ekstensi'];
+            foreach ($info as $key => $value) {
+                $file->{$key} = $value;
+            }
+            $file->label = $data['label'];
+            $file->keterangan = $data['keterangan'] ?? null;
+            $file->diperiksa_at = now('UTC');
+            $file->status = Berkas::MENUNGGU;
+            $file->revisi = 1;
+            $file->save();
+            $this->audit->tulis($file, $userId, 'reservasi', null, null);
+            return [$file, true];
+        }, 3);
+        if (! $baru) {
+            return $file;
+        }
+
+        // Efek storage di luar callback transaksi: retry deadlock tidak mengunggah ulang objek.
+        try {
+            $this->storage->tulis($file, $upload->getRealPath());
+        } catch (\Throwable $error) {
+            Log::warning('Unggahan berkas tidak selesai.', ['berkas_id' => $file->id, 'jenis' => $error::class]);
+            return $this->gagalUnggah($file->id, $userId);
+        }
+
+        // Jika proses/DB terputus di sini, metadata tetap menunggu dan tak bisa diunduh.
+        // Perintah berkas:rekonsiliasi akan menutup proses lama; tidak menghapus objek.
+        return DB::transaction(function () use ($file, $userId): Berkas {
+            $user = User::query()->whereKey($userId)->lockForUpdate()->firstOrFail();
+            $row = Berkas::query()->whereKey($file->id)->lockForUpdate()->firstOrFail();
+            if ($row->status !== Berkas::MENUNGGU) {
+                return $row;
+            }
+            $sebelum = $row->ringkasanAudit();
+            if (! $this->akses->masuk($user)) {
+                $row->status = Berkas::DITOLAK;
+                $row->pesan_status = 'Akses akun berubah sebelum proses unggah selesai.';
+            } else {
+                $row->status = Berkas::TERSEDIA;
+                $row->tersedia_at = now('UTC');
+            }
+            $row->revisi++;
+            $row->save();
+            $this->audit->tulis($row, $userId, 'selesai_unggah', $sebelum, $row->pesan_status);
+            return $row;
+        }, 3);
+    }
+
+    public function ubah(string $aksi, int $userId, Berkas $bound, array $data): Berkas
+    {
+        abort_unless(in_array($aksi, ['ubah', 'nonaktifkan', 'pulihkan'], true), 404);
+        return DB::transaction(function () use ($aksi, $userId, $bound, $data): Berkas {
+            $user = $this->kunciUser($userId);
+            $file = Berkas::query()->whereKey($bound->id)->lockForUpdate()->firstOrFail();
+            Gate::forUser($user)->authorize($aksi === 'ubah' ? 'update' : $aksi, $file);
+            if (! hash_equals($file->versiForm(), $data['versi'])) {
+                $this->gagal('Data sudah berubah. Muat ulang formulir sebelum menyimpan.');
+            }
+            if ($file->revisi >= 4294967295) {
+                $this->gagal('Batas revisi tercapai.');
+            }
+            $sebelum = $file->ringkasanAudit();
+            if (in_array($aksi, ['ubah', 'nonaktifkan'], true)) {
+                $this->referensi->pastikanBelumDipakai($file);
+            }
+            if ($aksi === 'ubah') {
+                $file->label = $data['label'];
+                $file->keterangan = $data['keterangan'] ?? null;
+                if (! $file->isDirty(['label', 'keterangan'])) {
+                    return $file;
+                }
+            } elseif ($aksi === 'nonaktifkan') {
+                $file->status = Berkas::DIHAPUS;
+                $file->dinonaktifkan_at = now('UTC');
+            } else {
+                // Pemulihan tidak mengubah objek/isi. Objek tetap diverifikasi saat unduh.
+                $file->status = Berkas::TERSEDIA;
+                $file->dinonaktifkan_at = null;
+            }
+            $file->revisi++;
+            $file->save();
+            $this->audit->tulis($file, $userId, $aksi, $sebelum, $data['alasan']);
+            return $file;
+        }, 3);
+    }
+
+    private function gagalUnggah(int $id, int $userId): Berkas
+    {
+        return DB::transaction(function () use ($id, $userId): Berkas {
+            $file = Berkas::query()->whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($file->status !== Berkas::MENUNGGU) {
+                return $file;
+            }
+            $sebelum = $file->ringkasanAudit();
+            $file->status = Berkas::DITOLAK;
+            $file->pesan_status = 'Penyimpanan tidak menyelesaikan proses. Coba unggah melalui formulir baru.';
+            $file->revisi++;
+            $file->save();
+            $this->audit->tulis($file, $userId, 'gagal_unggah', $sebelum, $file->pesan_status);
+            return $file;
+        }, 3);
+    }
+    private function kunciUser(int $id): User
+    {
+        $user = User::query()->whereKey($id)->lockForUpdate()->firstOrFail();
+        $user->roles()->orderBy('roles.id')->lockForUpdate()->get(['roles.id']);
+        $user->dosen()->lockForUpdate()->get();
+        $user->mahasiswa()->lockForUpdate()->get();
+        abort_unless($this->akses->masuk($user), 403);
+        return $user;
+    }
+    private function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages(['berkas' => $pesan]);
+    }
+}
+
+
+
+====================================================================================================
+FILE: .\app\Actions\SimpanJawabanLangsung.php
+====================================================================================================
+[FILE TIDAK DITEMUKAN]

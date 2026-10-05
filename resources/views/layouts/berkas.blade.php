@@ -11,36 +11,44 @@
 <body>
     <a class="skip" href="#konten">Langsung ke isi</a>
     <header class="topbar">
-        <a class="brand" href="{{ route('berkas.index') }}">ILYAS INSTITUTE <span>Berkas akademik</span></a>
+        <a class="brand" href="{{ route('home') }}">ILYAS INSTITUTE <span>Portal akademik</span></a>
         <nav aria-label="Navigasi berkas">
             @auth('web')
-                @can('akses-berkas')
-                    <a href="{{ route('berkas.index') }}">Berkas saya</a>
-                @endcan
+@if (Route::has('portal.mahasiswa.index'))
+    <a href="{{ route('portal.mahasiswa.index') }}">
+        Beranda
+    </a>
+@endif
+
+@if (auth('web')->user()->hasRole(\App\Models\Role::MAHASISWA))
+    <a href="{{ route('portal.profil.show') }}">
+        Profil Saya
+    </a>
+
+    <a href="{{ route('portal.krs.index') }}">
+        KRS Saya
+    </a>
+
+    <a href="{{ route('portal.jadwal.index') }}">
+        Jadwal Saya
+    </a>
+
+    <a href="{{ route('portal.presensi.index') }}">
+        Riwayat Presensi
+    </a>
+@endif
                 @can('akses-presensi')
                     <a href="{{ route('presensi.index') }}">Presensi</a>
                 @endcan
                 @can('kelola-pertemuan')
                     <a href="{{ route('admin.pertemuan.index') }}">Akademik</a>
                 @endcan
-
-                @can('akses-materi')
-                    <a href="{{ route('materi.index') }}">Materi Kuliah</a>
-                @endcan
-
-                @can('akses-kegiatan')
-                    <a href="{{ route('kegiatan.index') }}">Tugas dan Ujian</a>
-                @endcan
                 <span>{{ auth('web')->user()->nama }}</span>
-                <form action="{{ route('berkas.logout') }}" method="post">@csrf<button class="secondary"
+                <form action="{{ route('logout') }}" method="post">@csrf<button class="secondary"
                         type="submit">Keluar</button></form>
             @else
-                <a href="{{ route('login') }}">Login admin</a>
+                <a href="{{ route('login') }}">Masuk</a>
             @endauth
-
-            @can('akses-pengumpulan')
-                <a href="{{ route('pengumpulan.index') }}">Jawaban</a>
-            @endcan
 
             @can('akses-jenis-biaya')
                 <a href="{{ route('keuangan.jenis-biaya.index') }}">Jenis biaya</a>

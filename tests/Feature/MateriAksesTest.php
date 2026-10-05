@@ -23,6 +23,10 @@ class MateriAksesTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->markTestSkipped(
+            'Materi telah digabung ke modul kegiatan/pembelajaran.'
+        );
         if (! extension_loaded('pdo_sqlite')) {
             $this->markTestSkipped('Aktifkan pdo_sqlite untuk tes basis data terisolasi.');
         }

@@ -1,0 +1,2789 @@
+
+================================================================================
+FILE: .\app\Actions\KelolaBerkas.php
+================================================================================
+<?php
+
+namespace App\Actions;
+
+use App\Models\Berkas;
+use App\Models\User;
+use App\Services\AksesBerkas;
+use App\Services\LogBerkas;
+use App\Services\PemeriksaBerkas;
+use App\Services\PenyimpananBerkas;
+use App\Services\ReferensiBerkas;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+
+final class KelolaBerkas
+{
+    public function __construct(
+        private readonly PemeriksaBerkas $pemeriksa,
+        private readonly PenyimpananBerkas $storage,
+        private readonly AksesBerkas $akses,
+        private readonly LogBerkas $audit,
+        private readonly ReferensiBerkas $referensi
+    ) {}
+
+    public function unggah(int $userId, UploadedFile $upload, array $data): Berkas
+    {
+        $user = User::query()->findOrFail($userId);
+        Gate::forUser($user)->authorize('create', Berkas::class);
+        $info = $this->pemeriksa->periksa($upload);
+        try {
+            $disk = $this->storage->diskBaru();
+        } catch (\RuntimeException) {
+            $this->gagal('Penyimpanan privat belum dikonfigurasi. Hubungi pengelola.');
+        }
+        [$file, $baru] = DB::transaction(function () use ($userId, $info, $data, $disk): array {
+            $user = $this->kunciUser($userId);
+            $ada = Berkas::query()->where('diunggah_oleh', $userId)->where('upload_token', $data['upload_token'])
+                ->lockForUpdate()->first();
+            if ($ada !== null) {
+                if (
+                    ! hash_equals($ada->sha256, $info['sha256']) || $ada->ukuran_byte !== $info['ukuran_byte']
+                    || $ada->nama_asli !== $info['nama_asli'] || $ada->mime_type !== $info['mime_type']
+                    || $ada->label !== $data['label'] || $ada->keterangan !== ($data['keterangan'] ?? null)
+                ) {
+                    $this->gagal('Formulir unggahan ini sudah digunakan untuk data berbeda. Buka halaman unggah baru.');
+                }
+                return [$ada, false];
+            }
+            // Kuota menghitung semua reservasi, termasuk objek yang dinonaktifkan/gagal.
+            // Objek tersebut belum dihapus fisik; jangan membuat kuota seolah sudah bebas.
+            $terpakai = (int) Berkas::query()->where('diunggah_oleh', $userId)->sum('ukuran_byte');
+            if ($terpakai + $info['ukuran_byte'] > (int) config('berkas.kuota_byte')) {
+                $this->gagal('Kuota penyimpanan akun tidak mencukupi. Hubungi pengelola sistem.');
+            }
+            $file = new Berkas();
+            $file->diunggah_oleh = $user->id;
+            $file->upload_token = $data['upload_token'];
+            $file->storage_disk = $disk;
+            $file->object_key = 'siakad/berkas/' . now('UTC')->format('Y/m') . '/' . Str::uuid() . '.' . $info['ekstensi'];
+            foreach ($info as $key => $value) {
+                $file->{$key} = $value;
+            }
+            $file->label = $data['label'];
+            $file->keterangan = $data['keterangan'] ?? null;
+            $file->diperiksa_at = now('UTC');
+            $file->status = Berkas::MENUNGGU;
+            $file->revisi = 1;
+            $file->save();
+            $this->audit->tulis($file, $userId, 'reservasi', null, null);
+            return [$file, true];
+        }, 3);
+        if (! $baru) {
+            return $file;
+        }
+
+        // Efek storage di luar callback transaksi: retry deadlock tidak mengunggah ulang objek.
+        try {
+            $this->storage->tulis($file, $upload->getRealPath());
+        } catch (\Throwable $error) {
+            Log::warning('Unggahan berkas tidak selesai.', ['berkas_id' => $file->id, 'jenis' => $error::class]);
+            return $this->gagalUnggah($file->id, $userId);
+        }
+
+        // Jika proses/DB terputus di sini, metadata tetap menunggu dan tak bisa diunduh.
+        // Perintah berkas:rekonsiliasi akan menutup proses lama; tidak menghapus objek.
+        return DB::transaction(function () use ($file, $userId): Berkas {
+            $user = User::query()->whereKey($userId)->lockForUpdate()->firstOrFail();
+            $row = Berkas::query()->whereKey($file->id)->lockForUpdate()->firstOrFail();
+            if ($row->status !== Berkas::MENUNGGU) {
+                return $row;
+            }
+            $sebelum = $row->ringkasanAudit();
+            if (! $this->akses->masuk($user)) {
+                $row->status = Berkas::DITOLAK;
+                $row->pesan_status = 'Akses akun berubah sebelum proses unggah selesai.';
+            } else {
+                $row->status = Berkas::TERSEDIA;
+                $row->tersedia_at = now('UTC');
+            }
+            $row->revisi++;
+            $row->save();
+            $this->audit->tulis($row, $userId, 'selesai_unggah', $sebelum, $row->pesan_status);
+            return $row;
+        }, 3);
+    }
+
+    public function ubah(string $aksi, int $userId, Berkas $bound, array $data): Berkas
+    {
+        abort_unless(in_array($aksi, ['ubah', 'nonaktifkan', 'pulihkan'], true), 404);
+        return DB::transaction(function () use ($aksi, $userId, $bound, $data): Berkas {
+            $user = $this->kunciUser($userId);
+            $file = Berkas::query()->whereKey($bound->id)->lockForUpdate()->firstOrFail();
+            Gate::forUser($user)->authorize($aksi === 'ubah' ? 'update' : $aksi, $file);
+            if (! hash_equals($file->versiForm(), $data['versi'])) {
+                $this->gagal('Data sudah berubah. Muat ulang formulir sebelum menyimpan.');
+            }
+            if ($file->revisi >= 4294967295) {
+                $this->gagal('Batas revisi tercapai.');
+            }
+            $sebelum = $file->ringkasanAudit();
+            if (in_array($aksi, ['ubah', 'nonaktifkan'], true)) {
+                $this->referensi->pastikanBelumDipakai($file);
+            }
+            if ($aksi === 'ubah') {
+                $file->label = $data['label'];
+                $file->keterangan = $data['keterangan'] ?? null;
+                if (! $file->isDirty(['label', 'keterangan'])) {
+                    return $file;
+                }
+            } elseif ($aksi === 'nonaktifkan') {
+                $file->status = Berkas::DIHAPUS;
+                $file->dinonaktifkan_at = now('UTC');
+            } else {
+                // Pemulihan tidak mengubah objek/isi. Objek tetap diverifikasi saat unduh.
+                $file->status = Berkas::TERSEDIA;
+                $file->dinonaktifkan_at = null;
+            }
+            $file->revisi++;
+            $file->save();
+            $this->audit->tulis($file, $userId, $aksi, $sebelum, $data['alasan']);
+            return $file;
+        }, 3);
+    }
+
+    private function gagalUnggah(int $id, int $userId): Berkas
+    {
+        return DB::transaction(function () use ($id, $userId): Berkas {
+            $file = Berkas::query()->whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($file->status !== Berkas::MENUNGGU) {
+                return $file;
+            }
+            $sebelum = $file->ringkasanAudit();
+            $file->status = Berkas::DITOLAK;
+            $file->pesan_status = 'Penyimpanan tidak menyelesaikan proses. Coba unggah melalui formulir baru.';
+            $file->revisi++;
+            $file->save();
+            $this->audit->tulis($file, $userId, 'gagal_unggah', $sebelum, $file->pesan_status);
+            return $file;
+        }, 3);
+    }
+    private function kunciUser(int $id): User
+    {
+        $user = User::query()->whereKey($id)->lockForUpdate()->firstOrFail();
+        $user->roles()->orderBy('roles.id')->lockForUpdate()->get(['roles.id']);
+        $user->dosen()->lockForUpdate()->get();
+        $user->mahasiswa()->lockForUpdate()->get();
+        abort_unless($this->akses->masuk($user), 403);
+        return $user;
+    }
+    private function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages(['berkas' => $pesan]);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Actions\KelolaMateri.php
+================================================================================
+<?php
+
+namespace App\Actions;
+
+use App\Models\AuditLog;
+use App\Models\Berkas;
+use App\Models\Dosen;
+use App\Models\KelasKuliah;
+use App\Models\Materi;
+use App\Models\MateriBerkas;
+use App\Models\PengajarKelas;
+use App\Models\PeriodeAkademik;
+use App\Models\Pertemuan;
+use App\Models\Rombel;
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
+
+final class KelolaMateri
+{
+    // Data berasal dari MateriRequest / MateriStatusRequest, bukan request()->all().
+    public function buat(int $userId, array $data): Materi
+    {
+        return DB::transaction(function () use ($userId, $data): Materi {
+            [$user, $kelas] = $this->kunciKonteks($userId, (int) $data['kelas_kuliah_id']);
+            Gate::forUser($user)->authorize('create', [Materi::class, $kelas]);
+            $ids = $this->ids($data);
+            $hash = hash('sha256', json_encode([
+                'kelas' => $kelas->id,
+                'pertemuan' => ! empty($data['pertemuan_id']) ? (int) $data['pertemuan_id'] : null,
+                'judul' => $data['judul'],
+                'isi' => $data['isi'] ?? null,
+                'tautan' => $data['tautan_eksternal'] ?? null,
+                'berkas' => $ids,
+            ], JSON_THROW_ON_ERROR));
+            $ada = Materi::query()->where('pembuat_id', $userId)->where('form_token', $data['form_token'])->lockForUpdate()->first();
+            if ($ada !== null) {
+                if (! hash_equals($ada->hash_permohonan, $hash)) {
+                    $this->gagal('Formulir ini sudah dipakai untuk data lain. Buka formulir baru.');
+                }
+                return $ada;
+            }
+            $this->pertemuan($kelas->id, $data['pertemuan_id'] ?? null);
+            $m = new Materi();
+            $m->kelas_kuliah_id = $kelas->id;
+            $m->pembuat_id = $user->id;
+            $m->form_token = $data['form_token'];
+            $m->hash_permohonan = $hash;
+            $this->isi($m, $data);
+            $m->status = Materi::DRAF;
+            $m->revisi = 1;
+            $m->save();
+            $this->lampiran($m, $ids, $userId);
+            $this->audit($m, $userId, 'buat', null, null);
+            return $m;
+        }, 3);
+    }
+
+    public function ubah(int $userId, Materi $bound, array $data): Materi
+    {
+        return DB::transaction(function () use ($userId, $bound, $data): Materi {
+            [$user] = $this->kunciKonteks($userId, $bound->kelas_kuliah_id);
+            $m = Materi::query()->whereKey($bound->id)->lockForUpdate()->firstOrFail();
+            Gate::forUser($user)->authorize('update', $m);
+            $this->versi($m, $data);
+            $this->pertemuan($m->kelas_kuliah_id, $data['pertemuan_id'] ?? null);
+            $sebelum = $m->ringkasanAudit();
+            $this->lampiran($m, $this->ids($data), $userId);
+            $this->isi($m, $data);
+            $m->revisi++;
+            $m->save();
+            $this->audit($m, $userId, 'ubah', $sebelum, $data['alasan']);
+            return $m;
+        }, 3);
+    }
+
+    public function status(string $aksi, int $userId, Materi $bound, array $data): Materi
+    {
+        abort_unless(in_array($aksi, ['terbitkan', 'tarik', 'arsipkan', 'pulihkan'], true), 404);
+        return DB::transaction(function () use ($aksi, $userId, $bound, $data): Materi {
+            [$user] = $this->kunciKonteks($userId, $bound->kelas_kuliah_id);
+            $m = Materi::query()->whereKey($bound->id)->lockForUpdate()->firstOrFail();
+            Gate::forUser($user)->authorize($aksi, $m);
+            $this->versi($m, $data);
+            $sebelum = $m->ringkasanAudit();
+            if ($aksi === 'terbitkan') {
+                $this->pertemuan($m->kelas_kuliah_id, $m->pertemuan_id);
+                $ids = $m->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->map(fn($id) => (int) $id)->all();
+                $files = Berkas::query()->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get();
+                if ($files->count() !== count($ids) || $files->contains(fn(Berkas $b) => $b->status !== Berkas::TERSEDIA)) {
+                    $this->gagal('Semua lampiran harus tersedia sebelum materi diterbitkan.');
+                }
+                if (! app()->environment(['local', 'testing']) && $files->contains(fn(Berkas $b) => $b->pemeriksaan !== 'clamav')) {
+                    $this->gagal('Lampiran produksi harus sudah melalui pemindaian antivirus.');
+                }
+                if (blank($m->isi) && blank($m->tautan_eksternal) && $ids === []) {
+                    $this->gagal('Materi harus berisi uraian, tautan, atau minimal satu lampiran.');
+                }
+                $m->status = Materi::TERBIT;
+                $m->terbit_at = now('UTC')->startOfSecond();
+            } elseif ($aksi === 'arsipkan') {
+                $m->status = Materi::ARSIP;
+                $m->diarsipkan_at = now('UTC')->startOfSecond();
+            } else {
+                $m->status = Materi::DRAF;
+                $m->terbit_at = null;
+                $m->diarsipkan_at = null;
+            }
+            $m->revisi++;
+            $m->save();
+            $this->audit($m, $userId, $aksi, $sebelum, $data['alasan']);
+            return $m;
+        }, 3);
+    }
+
+    private function kunciKonteks(int $userId, int $kelasId): array
+    {
+        $user = User::query()->whereKey($userId)->lockForUpdate()->firstOrFail();
+        abort_unless($user->status === 'aktif', 403);
+        $roles = $user->roles()->orderBy('roles.id')->lockForUpdate()->get(['roles.id', 'roles.kode']);
+        $admin = $roles->contains('kode', 'admin_akademik');
+        abort_unless($admin || $roles->contains('kode', 'dosen'), 403);
+        $petunjuk = KelasKuliah::query()->with('rombel')->findOrFail($kelasId);
+        PeriodeAkademik::query()->whereKey($petunjuk->rombel->periode_akademik_id)->lockForUpdate()->firstOrFail();
+        Rombel::query()->whereKey($petunjuk->rombel_id)->lockForUpdate()->firstOrFail();
+        $kelas = KelasKuliah::query()->whereKey($kelasId)->lockForUpdate()->firstOrFail();
+        $tim = PengajarKelas::query()->where('kelas_kuliah_id', $kelasId)->orderBy('id')->lockForUpdate()->get();
+        if (! $admin) {
+            $dosen = Dosen::query()->where('user_id', $userId)->lockForUpdate()->first();
+            abort_unless($dosen && $dosen->status === 'aktif'
+                && $tim->contains(fn(PengajarKelas $p) => $p->aktif && $p->dosen_id === $dosen->id), 403);
+        }
+        return [$user, $kelas];
+    }
+    private function isi(Materi $m, array $data): void
+    {
+        $m->judul = $data['judul'];
+        $m->isi = $data['isi'] ?? null;
+        $m->tautan_eksternal = $data['tautan_eksternal'] ?? null;
+        $m->pertemuan_id = ! empty($data['pertemuan_id']) ? (int) $data['pertemuan_id'] : null;
+    }
+    private function ids(array $data): array
+    {
+        $ids = array_map('intval', $data['berkas_ids'] ?? []);
+        sort($ids, SORT_NUMERIC);
+        if (
+            count($ids) > (int) config('materi.maks_lampiran', 10) || count(array_unique($ids)) !== count($ids)
+            || ($ids !== [] && min($ids) < 1)
+        ) {
+            $this->gagal('Daftar lampiran tidak valid.');
+        }
+        return $ids;
+    }
+    private function pertemuan(int $kelasId, mixed $id): void
+    {
+        if ($id === null || $id === '') {
+            return;
+        }
+        $sesi = Pertemuan::query()->whereKey((int) $id)->where('kelas_kuliah_id', $kelasId)->lockForUpdate()->first();
+        if (! $sesi || $sesi->status === 'batal') {
+            $this->gagal('Pertemuan harus berasal dari kelas ini dan tidak dibatalkan.');
+        }
+    }
+    private function versi(Materi $m, array $data): void
+    {
+        if (! is_string($data['versi'] ?? null) || ! hash_equals($m->versiForm(), $data['versi'])) {
+            $this->gagal('Data sudah berubah. Muat ulang halaman sebelum menyimpan.');
+        }
+        if ($m->revisi >= 4294967295) {
+            $this->gagal('Batas revisi materi tercapai.');
+        }
+    }
+    private function lampiran(Materi $m, array $ids, int $userId): void
+    {
+        // Semua penulis harus mengunci materi lalu berkas berurutan, sebelum mengubah relasi.
+        $lama = $m->semuaLampiran()->get()->keyBy('berkas_id');
+        $seluruh = array_values(array_unique([...$ids, ...$lama->keys()->map(fn($id) => (int) $id)->all()]));
+        sort($seluruh, SORT_NUMERIC);
+        $files = Berkas::query()->whereIn('id', $seluruh)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+        foreach ($ids as $id) {
+            $file = $files->get($id);
+            $row = $lama->get($id);
+            // Lampiran tim yang masih aktif boleh dipertahankan. Lampiran baru/diaktifkan ulang wajib milik pelaku.
+            if (
+                ! $file || $file->status !== Berkas::TERSEDIA
+                || (! ($row && $row->aktif) && $file->diunggah_oleh !== $userId)
+            ) {
+                $this->gagal('Lampiran tidak tersedia atau tidak boleh dipasang oleh akun Anda.');
+            }
+            if (! $row) {
+                $row = new MateriBerkas();
+                $row->materi_id = $m->id;
+                $row->berkas_id = $id;
+                $row->aktif = true;
+                $row->dilepas_at = null;
+                $row->save();
+            } elseif (! $row->aktif) {
+                $row->aktif = true;
+                $row->dilepas_at = null;
+                $row->save();
+            }
+        }
+        foreach ($lama as $row) {
+            if ($row->aktif && ! in_array($row->berkas_id, $ids, true)) {
+                $row->aktif = false;
+                $row->dilepas_at = now('UTC');
+                $row->save();
+            }
+        }
+    }
+    private function audit(Materi $m, int $userId, string $aksi, ?array $sebelum, ?string $alasan): void
+    {
+        $a = new AuditLog();
+        $a->pelaku_id = $userId;
+        $a->entitas = 'materi';
+        $a->entitas_id = $m->id;
+        $a->versi_entitas = $m->revisi;
+        $a->aksi = $aksi;
+        $a->sebelum = $sebelum;
+        $a->sesudah = $m->ringkasanAudit();
+        $a->alasan = $alasan;
+        $a->waktu = now('UTC');
+        $a->save();
+    }
+    private function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages(['materi' => $pesan]);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Actions\KelolaKegiatan.php
+================================================================================
+<?php
+
+namespace App\Actions;
+
+use App\Models\AuditLog;
+use App\Models\Berkas;
+use App\Models\Dosen;
+use App\Models\Kegiatan;
+use App\Models\KegiatanBerkas;
+use App\Models\KelasKuliah;
+use App\Models\PengajarKelas;
+use App\Models\PeriodeAkademik;
+use App\Models\Pertemuan;
+use App\Models\Rombel;
+use App\Models\User;
+use App\Services\WaktuKegiatan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
+
+final class KelolaKegiatan
+{
+    public function buat(int $userId, array $data): Kegiatan
+    {
+        return DB::transaction(function () use ($userId, $data): Kegiatan {
+            [$user, $kelas] = $this->kunciKonteks($userId, (int) $data['kelas_kuliah_id']);
+            Gate::forUser($user)->authorize('create', [Kegiatan::class, $kelas]);
+            $isi = $this->dataIsi($data);
+            $ids = $this->ids($data);
+            $hash = hash('sha256', json_encode(['kelas' => $kelas->id, 'isi' => $isi, 'berkas' => $ids], JSON_THROW_ON_ERROR));
+            $ada = Kegiatan::query()->where('pembuat_id', $userId)->where('form_token', $data['form_token'])->lockForUpdate()->first();
+            if ($ada) {
+                if (! hash_equals($ada->hash_permohonan, $hash)) {
+                    $this->gagal('Formulir ini sudah digunakan untuk data berbeda. Buka formulir baru.');
+                }
+                return $ada;
+            }
+            $this->pertemuan($kelas->id, $isi['pertemuan_id']);
+            $k = new Kegiatan();
+            $k->kelas_kuliah_id = $kelas->id;
+            $k->pembuat_id = $userId;
+            $k->form_token = $data['form_token'];
+            $k->hash_permohonan = $hash;
+            foreach ($isi as $field => $value) {
+                $k->{$field} = $value;
+            }
+            $k->status = Kegiatan::DRAF;
+            $k->revisi = 1;
+            $k->save();
+            $this->lampiran($k, $ids, $userId);
+            $this->audit($k, $userId, 'buat', null, null);
+            return $k;
+        }, 3);
+    }
+    public function ubah(int $userId, Kegiatan $bound, array $data): Kegiatan
+    {
+        return DB::transaction(function () use ($userId, $bound, $data): Kegiatan {
+            [$user] = $this->kunciKonteks($userId, $bound->kelas_kuliah_id);
+            $k = Kegiatan::query()->whereKey($bound->id)->lockForUpdate()->firstOrFail();
+            Gate::forUser($user)->authorize('update', $k);
+            $this->versi($k, $data);
+            $isi = $this->dataIsi($data);
+            $this->pertemuan($k->kelas_kuliah_id, $isi['pertemuan_id']);
+            $sebelum = $k->ringkasanAudit();
+            $this->lampiran($k, $this->ids($data), $userId);
+            foreach ($isi as $field => $value) {
+                $k->{$field} = $value;
+            }
+            $k->revisi++;
+            $k->save();
+            $this->audit($k, $userId, 'ubah', $sebelum, $data['alasan']);
+            return $k;
+        }, 3);
+    }
+    public function status(string $aksi, int $userId, Kegiatan $bound, array $data): Kegiatan
+    {
+        abort_unless(in_array($aksi, ['terbitkan', 'tutup', 'bukaKembali', 'perpanjang', 'arsipkan', 'pulihkan'], true), 404);
+        return DB::transaction(function () use ($aksi, $userId, $bound, $data): Kegiatan {
+            [$user] = $this->kunciKonteks($userId, $bound->kelas_kuliah_id);
+            $k = Kegiatan::query()->whereKey($bound->id)->lockForUpdate()->firstOrFail();
+            Gate::forUser($user)->authorize($aksi, $k);
+            $this->versi($k, $data);
+            $sebelum = $k->ringkasanAudit();
+            $waktu = now('UTC')->startOfSecond();
+            if (in_array($aksi, ['terbitkan', 'bukaKembali'], true)) {
+                $this->pertemuan($k->kelas_kuliah_id, $k->pertemuan_id);
+                if (! $k->tenggat_at->gt($waktu)) {
+                    $this->gagal('Tenggat sudah lewat. Perbaiki jadwal draf atau perpanjang tenggat sebelum membuka kembali.');
+                }
+                $this->lampiranSiap($k);
+                $k->status = Kegiatan::TERBIT;
+                if ($k->terbit_at === null) {
+                    $k->terbit_at = $waktu;
+                }
+                $k->ditutup_at = null;
+            } elseif ($aksi === 'tutup') {
+                $k->status = Kegiatan::DITUTUP;
+                $k->ditutup_at = $waktu;
+            } elseif ($aksi === 'perpanjang') {
+                $baru = WaktuKegiatan::dariForm($data['tenggat_baru'] ?? null, 'tenggat_baru');
+                if (! $baru->gt($k->tenggat_at) || ! $baru->gt($waktu)) {
+                    $this->gagal('Tenggat baru harus lebih akhir daripada tenggat lama dan waktu server sekarang.');
+                }
+                $k->tenggat_at = $baru;
+            } elseif ($aksi === 'arsipkan') {
+                $k->status = Kegiatan::ARSIP;
+                $k->diarsipkan_at = $waktu;
+            } else {
+                $k->diarsipkan_at = null;
+                $k->status = $k->terbit_at === null ? Kegiatan::DRAF : Kegiatan::DITUTUP;
+                $k->ditutup_at = $k->terbit_at === null ? null : $waktu;
+            }
+            $k->revisi++;
+            $k->save();
+            $this->audit($k, $userId, $aksi, $sebelum, $data['alasan']);
+            return $k;
+        }, 3);
+    }
+    private function dataIsi(array $d): array
+    {
+        $buka = WaktuKegiatan::dariForm($d['buka_lokal'] ?? null, 'buka_lokal');
+        $tenggat = WaktuKegiatan::dariForm($d['tenggat_lokal'] ?? null, 'tenggat_lokal');
+        if (! $buka->lt($tenggat)) {
+            $this->gagal('Tenggat harus lebih akhir daripada waktu mulai.');
+        }
+        $ext = $d['ekstensi_diizinkan'];
+        sort($ext, SORT_STRING);
+        return [
+            'pertemuan_id' => ! empty($d['pertemuan_id']) ? (int) $d['pertemuan_id'] : null,
+            'jenis' => $d['jenis'],
+            'metode' => 'pengumpulan_berkas',
+            'judul' => $d['judul'],
+            'instruksi' => $d['instruksi'],
+            'buka_at' => $buka->format('Y-m-d H:i:s'),
+            'tenggat_at' => $tenggat->format('Y-m-d H:i:s'),
+            'maks_ukuran_byte' => (int) $d['maks_mb'] * 1048576,
+            'maks_berkas' => (int) $d['maks_berkas'],
+            'ekstensi_diizinkan' => $ext
+        ];
+    }
+    private function kunciKonteks(int $userId, int $kelasId): array
+    {
+        $user = User::query()->whereKey($userId)->lockForUpdate()->firstOrFail();
+        abort_unless($user->status === 'aktif', 403);
+        $roles = $user->roles()->orderBy('roles.id')->lockForUpdate()->get(['roles.id', 'roles.kode']);
+        $admin = $roles->contains('kode', 'admin_akademik');
+        abort_unless($admin || $roles->contains('kode', 'dosen'), 403);
+        $petunjuk = KelasKuliah::query()->with('rombel')->findOrFail($kelasId);
+        PeriodeAkademik::query()->whereKey($petunjuk->rombel->periode_akademik_id)->lockForUpdate()->firstOrFail();
+        Rombel::query()->whereKey($petunjuk->rombel_id)->lockForUpdate()->firstOrFail();
+        $kelas = KelasKuliah::query()->whereKey($kelasId)->lockForUpdate()->firstOrFail();
+        $tim = PengajarKelas::query()->where('kelas_kuliah_id', $kelasId)->orderBy('id')->lockForUpdate()->get();
+        if (! $admin) {
+            $dosen = Dosen::query()->where('user_id', $userId)->lockForUpdate()->first();
+            abort_unless($dosen && $dosen->status === 'aktif'
+                && $tim->contains(fn(PengajarKelas $p) => $p->aktif && $p->dosen_id === $dosen->id), 403);
+        }
+        return [$user, $kelas];
+    }
+    private function pertemuan(int $kelasId, mixed $id): void
+    {
+        if ($id === null || $id === '') {
+            return;
+        }
+        $s = Pertemuan::query()->whereKey((int) $id)->where('kelas_kuliah_id', $kelasId)->lockForUpdate()->first();
+        if (! $s || $s->status === 'batal') {
+            $this->gagal('Pertemuan harus berada di kelas ini dan tidak dibatalkan.');
+        }
+    }
+    private function versi(Kegiatan $k, array $d): void
+    {
+        if (! is_string($d['versi'] ?? null) || ! hash_equals($k->versiForm(), $d['versi'])) {
+            $this->gagal('Data sudah berubah. Muat ulang halaman sebelum menyimpan.');
+        }
+        if ($k->revisi >= 4294967295) {
+            $this->gagal('Batas revisi kegiatan tercapai.');
+        }
+    }
+    private function ids(array $d): array
+    {
+        $ids = array_map('intval', $d['berkas_ids'] ?? []);
+        sort($ids, SORT_NUMERIC);
+        if (
+            count($ids) > (int) config('kegiatan.maks_lampiran_instruksi', 10) || count(array_unique($ids)) !== count($ids)
+            || ($ids !== [] && min($ids) < 1)
+        ) {
+            $this->gagal('Daftar lampiran instruksi tidak valid.');
+        }
+        return $ids;
+    }
+    private function lampiran(Kegiatan $k, array $ids, int $userId): void
+    {
+        $lama = $k->semuaLampiran()->get()->keyBy('berkas_id');
+        $semua = array_values(array_unique([...$ids, ...$lama->keys()->map(fn($id) => (int) $id)->all()]));
+        sort($semua, SORT_NUMERIC);
+        $files = Berkas::query()->whereIn('id', $semua)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+        foreach ($ids as $id) {
+            $file = $files->get($id);
+            $row = $lama->get($id);
+            if (
+                ! $file || $file->status !== Berkas::TERSEDIA
+                || (! ($row && $row->aktif) && $file->diunggah_oleh !== $userId)
+            ) {
+                $this->gagal('Lampiran tidak tersedia atau tidak boleh dipasang oleh akun Anda.');
+            }
+            if (! $row) {
+                $row = new KegiatanBerkas();
+                $row->kegiatan_id = $k->id;
+                $row->berkas_id = $id;
+                $row->aktif = true;
+                $row->dilepas_at = null;
+                $row->save();
+            } elseif (! $row->aktif) {
+                $row->aktif = true;
+                $row->dilepas_at = null;
+                $row->save();
+            }
+        }
+        foreach ($lama as $row) {
+            if ($row->aktif && ! in_array($row->berkas_id, $ids, true)) {
+                $row->aktif = false;
+                $row->dilepas_at = now('UTC');
+                $row->save();
+            }
+        }
+    }
+    private function lampiranSiap(Kegiatan $k): void
+    {
+        $ids = $k->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all();
+        $files = Berkas::query()->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get();
+        if ($files->count() !== count($ids) || $files->contains(fn(Berkas $b) => $b->status !== Berkas::TERSEDIA)) {
+            $this->gagal('Lampiran instruksi belum tersedia.');
+        }
+        if (! app()->environment(['local', 'testing']) && $files->contains(fn(Berkas $b) => $b->pemeriksaan !== 'clamav')) {
+            $this->gagal('Lampiran produksi harus sudah dipindai antivirus.');
+        }
+    }
+    private function audit(Kegiatan $k, int $userId, string $aksi, ?array $sebelum, ?string $alasan): void
+    {
+        $a = new AuditLog();
+        $a->pelaku_id = $userId;
+        $a->entitas = 'kegiatan';
+        $a->entitas_id = $k->id;
+        $a->versi_entitas = $k->revisi;
+        $a->aksi = $aksi;
+        $a->sebelum = $sebelum;
+        $a->sesudah = $k->ringkasanAudit();
+        $a->alasan = $alasan;
+        $a->waktu = now('UTC');
+        $a->save();
+    }
+    private function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages(['kegiatan' => $pesan]);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Actions\KelolaPengumpulan.php
+================================================================================
+<?php
+
+namespace App\Actions;
+
+use App\Models\AuditLog;
+use App\Models\Berkas;
+use App\Models\Kegiatan;
+use App\Models\Pengumpulan;
+use App\Models\PengumpulanBerkas;
+use App\Models\User;
+use App\Services\AksesPengumpulan;
+use App\Services\AturanJawaban;
+use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+final class KelolaPengumpulan
+{
+    public function __construct(private readonly AksesPengumpulan $akses) {}
+    public function buat(int $userId, Kegiatan $bound, array $data): Pengumpulan
+    {
+        if (
+            ! Str::isUuid((string) ($data['token_draf'] ?? ''))
+            || ! preg_match('/\A(?:0|[1-9][0-9]{0,9})\z/', (string) ($data['dasar_versi'] ?? ''))
+        ) {
+            AturanJawaban::gagal('Token atau nomor dasar versi tidak valid.');
+        }
+        return DB::transaction(function () use ($userId, $bound, $data): Pengumpulan {
+            $hint = Pengumpulan::query()->where('pemilik_id', $userId)->where('token_draf', $data['token_draf'])->first();
+            $id = $hint?->detail_krs_id ?? $this->akses->detail(User::query()->findOrFail($userId), $bound);
+            abort_unless($id !== null, 403, 'Keikutsertaan aktif tidak tersedia atau ganda. Hubungi akademik.');
+            $c = $this->kunci($userId, $bound->id, $id);
+            $lama = Pengumpulan::query()->where('pemilik_id', $userId)->where('token_draf', $data['token_draf'])->lockForUpdate()->first();
+            if ($lama) {
+                if ($lama->kegiatan_id !== $c['kegiatan']->id || $lama->detail_krs_id !== (int) $c['detail']->id) {
+                    AturanJawaban::gagal('Token sudah digunakan untuk kegiatan lain. Buka halaman kembali.');
+                }
+                return $lama;
+            }
+            $this->bolehMenulis($c);
+            $q = Pengumpulan::query()->where('kegiatan_id', $bound->id)->where('detail_krs_id', $id);
+            $draf = (clone $q)->where('status', Pengumpulan::DRAF)->lockForUpdate()->first();
+            if ($draf) {
+                abort_unless($draf->pemilik_id === $userId, 403);
+                return $draf;
+            }
+            $terakhir = (clone $q)->orderByDesc('versi')->lockForUpdate()->first();
+            $nomor = $terakhir?->versi ?? 0;
+            if ($nomor !== (int) $data['dasar_versi'] || $nomor >= 4294967295) {
+                AturanJawaban::gagal('Daftar versi berubah. Muat ulang sebelum membuat versi berikutnya.');
+            }
+            $p = new Pengumpulan();
+            $p->kegiatan_id = $bound->id;
+            $p->detail_krs_id = $id;
+            $p->pemilik_id = $userId;
+            $p->versi = $nomor + 1;
+            $p->revisi = 1;
+            $p->token_draf = $data['token_draf'];
+            $p->kunci_kirim = bin2hex(random_bytes(32));
+            $p->jawaban_teks = null;
+            $p->status = Pengumpulan::DRAF;
+            $p->penanda_draf = 1;
+            $this->bolehMenulis($c);
+            $p->save();
+            $this->audit($p, $userId, 'buat_draf', null);
+            return $p;
+        }, 3);
+    }
+    public function ubah(int $userId, Pengumpulan $bound, array $data): Pengumpulan
+    {
+        $teks = AturanJawaban::teks($data['jawaban_teks'] ?? null);
+        $ids = AturanJawaban::ids($data['berkas_ids'] ?? []);
+        return DB::transaction(function () use ($userId, $bound, $data, $teks, $ids): Pengumpulan {
+            $c = $this->kunci($userId, $bound->kegiatan_id, $bound->detail_krs_id);
+            $p = $this->pengumpulan($bound->id, $userId, $c);
+            if ($p->status !== Pengumpulan::DRAF) {
+                AturanJawaban::gagal('Kiriman final terkunci. Buat versi baru untuk memperbaikinya.');
+            }
+            $this->versi($p, $data);
+            $this->bolehMenulis($c);
+            $sebelum = $p->ringkasanAudit();
+            $this->lampiran($p, $c['kegiatan'], $ids);
+            $p->jawaban_teks = $teks;
+            $p->revisi++;
+            $this->bolehMenulis($c); // Jam dibaca ulang setelah menunggu semua kunci berkas.
+            $p->save();
+            $this->audit($p, $userId, 'simpan_draf', $sebelum);
+            return $p;
+        }, 3);
+    }
+    public function kirim(int $userId, Pengumpulan $bound, array $data): Pengumpulan
+    {
+        return DB::transaction(function () use ($userId, $bound, $data): Pengumpulan {
+            $c = $this->kunci($userId, $bound->kegiatan_id, $bound->detail_krs_id);
+            $p = $this->pengumpulan($bound->id, $userId, $c);
+            if (! is_string($data['kunci_kirim'] ?? null) || ! hash_equals($p->kunci_kirim, $data['kunci_kirim'])) {
+                AturanJawaban::gagal('Kunci pengiriman tidak sesuai. Muat ulang detail jawaban.');
+            }
+            if ($p->status === Pengumpulan::DIKIRIM) {
+                return $p;
+            } // Tidak membuat audit/versi/waktu baru.
+            $this->versi($p, $data);
+            $this->bolehMenulis($c);
+            $sebelum = $p->ringkasanAudit();
+            $this->lampiranSiap($p, $c['kegiatan']);
+            if (blank($p->jawaban_teks) && ! $p->lampiran()->exists()) {
+                AturanJawaban::gagal('Isi teks jawaban atau lampirkan minimal satu berkas.');
+            }
+            $p->hash_jawaban = $p->hitungHash();
+            $waktu = $this->bolehMenulis($c); // Keputusan final memakai waktu server setelah seluruh lock.
+            $p->status = Pengumpulan::DIKIRIM;
+            $p->penanda_draf = null;
+            $p->dikirim_at = $waktu->startOfSecond();
+            $p->tenggat_snapshot = $c['kegiatan']->tenggat_at;
+            $p->revisi_kegiatan = $c['kegiatan']->revisi;
+            $p->revisi++;
+            $p->save();
+            $this->audit($p, $userId, 'kirim', $sebelum);
+            return $p;
+        }, 3);
+    }
+    private function kunci(int $userId, int $kegiatanId, int $detailId): array
+    {
+        $user = User::query()->whereKey($userId)->lockForUpdate()->firstOrFail();
+        $roles = $user->roles()->orderBy('roles.id')->lockForUpdate()->get(['roles.id', 'roles.kode']);
+        abort_unless($user->status === 'aktif' && $roles->contains('kode', 'mahasiswa'), 403);
+        $hint = DB::table('detail_krs as d')->join('krs as k', 'k.id', '=', 'd.krs_id')
+            ->join('registrasi_semester as r', 'r.id', '=', 'k.registrasi_semester_id')
+            ->join('riwayat_studi as h', 'h.id', '=', 'r.riwayat_studi_id')->join('mahasiswa as m', 'm.id', '=', 'h.mahasiswa_id')
+            ->where('d.id', $detailId)->where('m.user_id', $userId)
+            ->first(['d.krs_id', 'd.kelas_kuliah_id', 'k.registrasi_semester_id', 'r.riwayat_studi_id', 'h.mahasiswa_id']);
+        abort_unless($hint, 403);
+        $mahasiswa = $this->baris('mahasiswa', (int) $hint->mahasiswa_id);
+        $riwayat = $this->baris('riwayat_studi', (int) $hint->riwayat_studi_id);
+        $hintKelas = DB::table('kelas_kuliah')->where('id', $hint->kelas_kuliah_id)->firstOrFail();
+        $hintRombel = DB::table('rombel')->where('id', $hintKelas->rombel_id)->firstOrFail();
+        $periode = $this->baris('periode_akademik', (int) $hintRombel->periode_akademik_id);
+        $rombel = $this->baris('rombel', (int) $hintKelas->rombel_id);
+        $kelas = $this->baris('kelas_kuliah', (int) $hint->kelas_kuliah_id);
+        $registrasi = $this->baris('registrasi_semester', (int) $hint->registrasi_semester_id);
+        $krs = $this->baris('krs', (int) $hint->krs_id);
+        $detail = $this->baris('detail_krs', $detailId); // Serialisasi alokasi nomor versi/satu draf.
+        $kegiatan = Kegiatan::query()->whereKey($kegiatanId)->lockForUpdate()->firstOrFail();
+        $pertemuan = $kegiatan->pertemuan_id === null ? null : $this->baris('pertemuan', $kegiatan->pertemuan_id);
+        if (
+            (int) $mahasiswa->user_id !== $userId || (int) $riwayat->mahasiswa_id !== (int) $mahasiswa->id
+            || (int) $registrasi->riwayat_studi_id !== (int) $riwayat->id || (int) $krs->registrasi_semester_id !== (int) $registrasi->id
+            || (int) $detail->krs_id !== (int) $krs->id || (int) $detail->kelas_kuliah_id !== (int) $kelas->id
+            || $kegiatan->kelas_kuliah_id !== (int) $kelas->id || (int) $kelas->rombel_id !== (int) $rombel->id
+            || (int) $rombel->periode_akademik_id !== (int) $periode->id || (int) $registrasi->rombel_id !== (int) $rombel->id
+            || (int) $registrasi->periode_akademik_id !== (int) $periode->id
+            || ($pertemuan && (int) $pertemuan->kelas_kuliah_id !== (int) $kelas->id)
+        ) {
+            AturanJawaban::gagal('Hubungan peserta, kegiatan, kelas, atau periode tidak sesuai. Hubungi akademik.');
+        }
+        return compact('user', 'mahasiswa', 'riwayat', 'periode', 'rombel', 'kelas', 'registrasi', 'krs', 'detail', 'kegiatan', 'pertemuan');
+    }
+    private function baris(string $tabel, int $id): object
+    {
+        // Nama tabel hanya berasal dari konstanta di kunci(), bukan input HTTP.
+        return DB::table($tabel)->where('id', $id)->lockForUpdate()->firstOrFail();
+    }
+    private function pengumpulan(int $id, int $userId, array $c): Pengumpulan
+    {
+        return Pengumpulan::query()->whereKey($id)->where('pemilik_id', $userId)->where('kegiatan_id', $c['kegiatan']->id)
+            ->where('detail_krs_id', $c['detail']->id)->lockForUpdate()->firstOrFail();
+    }
+    private function bolehMenulis(array $c): CarbonImmutable
+    {
+        $waktu = CarbonImmutable::now('UTC');
+        if (
+            $c['detail']->status !== 'aktif' || $c['krs']->status !== 'disahkan' || $c['registrasi']->status !== 'aktif'
+            || $c['riwayat']->status !== 'aktif' || $c['kelas']->status !== 'aktif' || $c['periode']->status !== 'aktif'
+            || ($c['pertemuan'] && $c['pertemuan']->status === 'batal') || $c['kegiatan']->metode !== 'pengumpulan_berkas'
+            || ! $c['kegiatan']->jendelaTerbuka($waktu)
+        ) {
+            AturanJawaban::gagal('Pengumpulan belum dibuka/sudah ditutup, tenggat lewat, atau keikutsertaan akademik tidak aktif. Draf tidak dianggap terkumpul.');
+        }
+        return $waktu;
+    }
+    private function versi(Pengumpulan $p, array $data): void
+    {
+        if (! is_string($data['versi_form'] ?? null) || ! hash_equals($p->versiForm(), $data['versi_form']) || $p->revisi >= 4294967295) {
+            AturanJawaban::gagal('Draf berubah di halaman lain. Muat ulang dan periksa jawaban sebelum melanjutkan.');
+        }
+    }
+    private function lampiran(Pengumpulan $p, Kegiatan $k, array $ids): void
+    {
+        if (count($ids) > $k->maks_berkas) {
+            AturanJawaban::gagal('Jumlah berkas melebihi batas kegiatan.');
+        }
+        $lama = $p->semuaLampiran()->orderBy('berkas_id')->lockForUpdate()->get()->keyBy('berkas_id');
+        $semua = array_values(array_unique([...$ids, ...$lama->keys()->map(fn($id) => (int) $id)->all()]));
+        sort($semua, SORT_NUMERIC);
+        $files = Berkas::query()->whereIn('id', $semua)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+        foreach ($ids as $id) {
+            $b = $files->get($id);
+            if (! $b) {
+                AturanJawaban::gagal('Salah satu berkas tidak tersedia.');
+            }
+            AturanJawaban::berkas($b, $k, $p->pemilik_id);
+            $row = $lama->get($id);
+            if ($row && ! $row->cocok($b)) {
+                AturanJawaban::gagal('Snapshot berkas berubah; hubungi pengelola.');
+            }
+            if (! $row) {
+                $row = new PengumpulanBerkas();
+                $row->pengumpulan_id = $p->id;
+                $row->berkas_id = $id;
+                foreach (PengumpulanBerkas::SNAPSHOT as $field) {
+                    $row->{$field} = $b->{$field};
+                }
+                $row->aktif = true;
+                $row->dilepas_at = null;
+                $row->save();
+            } elseif (! $row->aktif) {
+                $row->aktif = true;
+                $row->dilepas_at = null;
+                $row->save();
+            }
+        }
+        foreach ($lama as $row) {
+            if ($row->aktif && ! in_array($row->berkas_id, $ids, true)) {
+                $row->aktif = false;
+                $row->dilepas_at = now('UTC');
+                $row->save();
+            }
+        }
+    }
+    private function lampiranSiap(Pengumpulan $p, Kegiatan $k): void
+    {
+        $rows = $p->lampiran()->orderBy('berkas_id')->lockForUpdate()->get();
+        if ($rows->count() > $k->maks_berkas) {
+            AturanJawaban::gagal('Lampiran melebihi batas kegiatan.');
+        }
+        $files = Berkas::query()->whereIn('id', $rows->pluck('berkas_id'))->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+        foreach ($rows as $row) {
+            $b = $files->get($row->berkas_id);
+            if (! $b || ! $row->cocok($b)) {
+                AturanJawaban::gagal('Berkas hilang atau snapshot berubah. Kiriman belum disimpan.');
+            }
+            AturanJawaban::berkas($b, $k, $p->pemilik_id);
+        }
+    }
+    private function audit(Pengumpulan $p, int $userId, string $aksi, ?array $sebelum): void
+    {
+        $a = new AuditLog();
+        $a->pelaku_id = $userId;
+        $a->entitas = 'pengumpulan';
+        $a->entitas_id = $p->id;
+        $a->versi_entitas = $p->revisi;
+        $a->aksi = $aksi;
+        $a->sebelum = $sebelum;
+        $a->sesudah = $p->ringkasanAudit();
+        $a->alasan = null;
+        $a->waktu = now('UTC');
+        $a->save();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\BerkasRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use App\Models\Berkas;
+use Illuminate\Foundation\Http\FormRequest;
+
+class BerkasRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        if ($this->routeIs('berkas.store')) {
+            return $this->user()?->can('create', Berkas::class) ?? false;
+        }
+        $file = $this->route('berkas');
+        return $file instanceof Berkas && ($this->user()?->can('view', $file) ?? false);
+    }
+    protected function prepareForValidation(): void
+    {
+        foreach (['label', 'keterangan', 'alasan'] as $key) {
+            if (is_string($this->input($key))) {
+                $value = trim($this->input($key));
+                $this->merge([$key => $value === '' ? null : $value]);
+            }
+        }
+    }
+    public function rules(): array
+    {
+        $metadata = ['label' => ['required', 'string', 'max:200'], 'keterangan' => ['nullable', 'string', 'max:2000']];
+        if ($this->routeIs('berkas.store')) {
+            return $metadata + [
+                'upload_token' => ['required', 'uuid'],
+                'file' => ['required', 'file', 'min:1', 'max:' . config('berkas.maks_kib'), 'mimes:pdf,jpg,jpeg,png']
+            ];
+        }
+        $rules = [
+            'versi' => ['required', 'string', 'regex:/\A[a-f0-9]{64}\z/'],
+            'alasan' => ['required', 'string', 'min:10', 'max:2000']
+        ];
+        return $this->routeIs('berkas.update') ? $rules + $metadata : $rules + ['konfirmasi' => ['accepted']];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\MateriRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use App\Models\Materi;
+use App\Rules\TautanMateri;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
+
+class MateriRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user() !== null && Gate::allows('akses-materi');
+    }
+    protected function prepareForValidation(): void
+    {
+        // Jangan menerima array berkas_ids tersembunyi dari klien; sumbernya hanya kolom teks ini.
+        $raw = $this->input('lampiran_ids', '');
+        $ids = is_string($raw) ? preg_split('/[\s,]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY) : null;
+        $this->merge(['berkas_ids' => $ids]);
+        foreach (['judul', 'isi', 'tautan_eksternal', 'alasan'] as $key) {
+            if (is_string($this->input($key))) {
+                $value = trim($this->input($key));
+                $this->merge([$key => $value === '' ? null : $value]);
+            }
+        }
+    }
+    public function rules(): array
+    {
+        $edit = $this->route('materi') instanceof Materi;
+        return [
+            'kelas_kuliah_id' => $edit ? ['prohibited'] : ['required', 'integer', 'min:1'],
+            'form_token' => $edit ? ['prohibited'] : ['required', 'uuid'],
+            'versi' => $edit ? ['required', 'string', 'size:64', 'regex:/\A[a-f0-9]{64}\z/'] : ['prohibited'],
+            'pertemuan_id' => ['nullable', 'integer', 'min:1'],
+            'judul' => ['required', 'string', 'max:200'],
+            'isi' => ['nullable', 'string', 'max:10000'],
+            'tautan_eksternal' => ['nullable', 'string', 'max:2000', new TautanMateri()],
+            'lampiran_ids' => ['nullable', 'string', 'max:250'],
+            'berkas_ids' => ['present', 'array', 'max:' . (int) config('materi.maks_lampiran', 10)],
+            'berkas_ids.*' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,17}\z/', 'distinct'],
+            'alasan' => $edit ? ['required', 'string', 'min:10', 'max:1000'] : ['nullable', 'string', 'max:1000'],
+            'pembuat_id' => ['prohibited'],
+            'status' => ['prohibited'],
+            'revisi' => ['prohibited'],
+            'terbit_at' => ['prohibited'],
+            'diarsipkan_at' => ['prohibited'],
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\MateriStatusRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
+
+class MateriStatusRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user() !== null && Gate::allows('akses-materi');
+    }
+    public function rules(): array
+    {
+        return [
+            'versi' => ['required', 'string', 'size:64', 'regex:/\A[a-f0-9]{64}\z/'],
+            'alasan' => ['required', 'string', 'min:10', 'max:1000'],
+            'konfirmasi' => ['accepted']
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\KegiatanRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use App\Models\Kegiatan;
+use App\Services\WaktuKegiatan;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Validator;
+
+class KegiatanRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user() !== null && Gate::allows('akses-kegiatan');
+    }
+    protected function prepareForValidation(): void
+    {
+        $raw = $this->input('lampiran_ids', '');
+        $this->merge(['berkas_ids' => is_string($raw) ? preg_split('/[\s,]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY) : null]);
+        foreach (['judul', 'instruksi', 'alasan'] as $field) {
+            if (is_string($this->input($field))) {
+                $this->merge([$field => trim($this->input($field))]);
+            }
+        }
+    }
+    public function rules(): array
+    {
+        $edit = $this->route('kegiatan') instanceof Kegiatan;
+        return [
+            'kelas_kuliah_id' => $edit ? ['prohibited'] : ['required', 'integer', 'min:1'],
+            'form_token' => $edit ? ['prohibited'] : ['required', 'uuid'],
+            'versi' => $edit ? ['required', 'string', 'size:64', 'regex:/\A[a-f0-9]{64}\z/'] : ['prohibited'],
+            'pertemuan_id' => ['nullable', 'integer', 'min:1'],
+            'jenis' => ['required', Rule::in(array_keys(Kegiatan::JENIS))],
+            'judul' => ['required', 'string', 'max:200'],
+            'instruksi' => ['required', 'string', 'min:10', 'max:10000'],
+            'buka_lokal' => ['required', 'string', 'size:16'],
+            'tenggat_lokal' => ['required', 'string', 'size:16'],
+            'maks_mb' => ['required', 'integer', 'min:1', 'max:' . min(20, (int) config('kegiatan.batas_mb_jawaban', 20))],
+            'maks_berkas' => ['required', 'integer', 'min:1', 'max:' . min(5, (int) config('kegiatan.batas_berkas_jawaban', 5))],
+            'ekstensi_diizinkan' => ['required', 'array', 'min:1', 'max:3'],
+            'ekstensi_diizinkan.*' => ['required', 'string', 'distinct', Rule::in(config('kegiatan.ekstensi_jawaban', ['pdf', 'jpg', 'png']))],
+            'lampiran_ids' => ['nullable', 'string', 'max:250'],
+            'berkas_ids' => ['present', 'array', 'max:' . (int) config('kegiatan.maks_lampiran_instruksi', 10)],
+            'berkas_ids.*' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,17}\z/', 'distinct'],
+            'alasan' => $edit ? ['required', 'string', 'min:10', 'max:1000'] : ['nullable', 'string', 'max:1000'],
+            'pembuat_id' => ['prohibited'],
+            'metode' => ['prohibited'],
+            'status' => ['prohibited'],
+            'revisi' => ['prohibited'],
+            'terbit_at' => ['prohibited'],
+            'buka_at' => ['prohibited'],
+            'tenggat_at' => ['prohibited'],
+            'ditutup_at' => ['prohibited'],
+            'diarsipkan_at' => ['prohibited'],
+            'maks_ukuran_byte' => ['prohibited'],
+        ];
+    }
+    public function after(): array
+    {
+        return [function (Validator $v): void {
+            if ($v->errors()->isNotEmpty()) {
+                return;
+            }
+            try {
+                $buka = WaktuKegiatan::dariForm($this->input('buka_lokal'), 'buka_lokal');
+                $tenggat = WaktuKegiatan::dariForm($this->input('tenggat_lokal'), 'tenggat_lokal');
+                if (! $buka->lt($tenggat)) {
+                    $v->errors()->add('tenggat_lokal', 'Tenggat harus lebih akhir daripada waktu mulai.');
+                }
+            } catch (ValidationException $e) {
+                foreach ($e->errors() as $field => $messages) {
+                    foreach ($messages as $m) {
+                        $v->errors()->add($field, $m);
+                    }
+                }
+            }
+        }];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\KegiatanStatusRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
+
+class KegiatanStatusRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user() !== null && Gate::allows('akses-kegiatan');
+    }
+    public function rules(): array
+    {
+        return [
+            'versi' => ['required', 'string', 'size:64', 'regex:/\A[a-f0-9]{64}\z/'],
+            'alasan' => ['required', 'string', 'min:10', 'max:1000'],
+            'konfirmasi' => ['accepted'],
+            'tenggat_baru' => $this->routeIs('kegiatan.perpanjang') ? ['required', 'string', 'size:16'] : ['prohibited']
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\PengumpulanDrafRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use App\Services\AksesPengumpulan;
+use Illuminate\Foundation\Http\FormRequest;
+
+class PengumpulanDrafRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user() !== null && app(AksesPengumpulan::class)->mahasiswa($this->user());
+    }
+    public function rules(): array
+    {
+        return [
+            'token_draf' => ['required', 'uuid'],
+            'dasar_versi' => ['required', 'integer', 'min:0', 'max:4294967294'],
+            'pemilik_id' => ['prohibited'],
+            'detail_krs_id' => ['prohibited'],
+            'kegiatan_id' => ['prohibited'],
+            'status' => ['prohibited'],
+            'versi' => ['prohibited'],
+            'kunci_kirim' => ['prohibited']
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\PengumpulanRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use App\Models\Pengumpulan;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
+
+class PengumpulanRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        $p = $this->route('pengumpulan');
+        return $p instanceof Pengumpulan && Gate::allows('update', $p);
+    }
+    protected function prepareForValidation(): void
+    {
+        $raw = $this->input('lampiran_ids', '');
+        $this->merge(['berkas_ids' => is_string($raw) ? preg_split('/[\s,]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY) : null]);
+    }
+    public function rules(): array
+    {
+        return [
+            'versi_form' => ['required', 'string', 'regex:/\A[a-f0-9]{64}\z/'],
+            'jawaban_teks' => ['nullable', 'string', 'max:' . max(1, min(10000, (int) config('pengumpulan.maks_karakter_jawaban', 10000)))],
+            'lampiran_ids' => ['nullable', 'string', 'max:150'],
+            'berkas_ids' => ['present', 'array', 'max:5'],
+            'berkas_ids.*' => ['required', 'string', 'regex:/\A[1-9][0-9]{0,17}\z/', 'distinct'],
+            'pemilik_id' => ['prohibited'],
+            'detail_krs_id' => ['prohibited'],
+            'kegiatan_id' => ['prohibited'],
+            'status' => ['prohibited'],
+            'versi' => ['prohibited'],
+            'revisi' => ['prohibited'],
+            'kunci_kirim' => ['prohibited'],
+            'dikirim_at' => ['prohibited'],
+            'hash_jawaban' => ['prohibited']
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Requests\PengumpulanKirimRequest.php
+================================================================================
+<?php
+
+namespace App\Http\Requests;
+
+use App\Models\Pengumpulan;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
+
+class PengumpulanKirimRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        $p = $this->route('pengumpulan');
+        return $p instanceof Pengumpulan && Gate::allows('kirim', $p);
+    }
+    public function rules(): array
+    {
+        return [
+            'versi_form' => ['required', 'string', 'regex:/\A[a-f0-9]{64}\z/'],
+            'kunci_kirim' => ['required', 'string', 'regex:/\A[a-f0-9]{64}\z/'],
+            'konfirmasi' => ['accepted'],
+            'jawaban_teks' => ['prohibited'],
+            'lampiran_ids' => ['prohibited'],
+            'berkas_ids' => ['prohibited'],
+            'pemilik_id' => ['prohibited'],
+            'detail_krs_id' => ['prohibited'],
+            'kegiatan_id' => ['prohibited'],
+            'status' => ['prohibited'],
+            'dikirim_at' => ['prohibited']
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Models\Berkas.php
+================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+use LogicException;
+
+class Berkas extends Model
+{
+    public const MENUNGGU = 'menunggu';
+    public const TERSEDIA = 'tersedia';
+    public const DITOLAK = 'ditolak';
+    public const DIHAPUS = 'dihapus';
+    public const STATUS = [
+        self::MENUNGGU => 'Sedang diproses',
+        self::TERSEDIA => 'Tersedia',
+        self::DITOLAK => 'Gagal diproses',
+        self::DIHAPUS => 'Dinonaktifkan'
+    ];
+    public const IDENTITAS = [
+        'diunggah_oleh',
+        'upload_token',
+        'storage_disk',
+        'object_key',
+        'nama_asli',
+        'mime_type',
+        'ekstensi',
+        'ukuran_byte',
+        'sha256',
+        'pemeriksaan',
+        'diperiksa_at'
+    ];
+    protected $table = 'berkas';
+    protected $guarded = ['*'];
+    protected $hidden = ['storage_disk', 'object_key', 'upload_token'];
+
+    protected function casts(): array
+    {
+        return [
+            'diunggah_oleh' => 'integer',
+            'ukuran_byte' => 'integer',
+            'revisi' => 'integer',
+            'diperiksa_at' => 'immutable_datetime',
+            'tersedia_at' => 'immutable_datetime',
+            'dinonaktifkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $file): void {
+            if (
+                DB::transactionLevel() < 1 || ! isset(self::STATUS[$file->status]) || $file->ukuran_byte < 1
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $file->sha256) || blank($file->label)
+            ) {
+                throw new LogicException('Metadata berkas wajib lengkap dan disimpan melalui transaksi.');
+            }
+            if (! $file->exists) {
+                if ($file->status !== self::MENUNGGU || $file->revisi !== 1) {
+                    throw new LogicException('Berkas baru harus menunggu, revisi 1.');
+                }
+            } else {
+                $asal = $file->getRawOriginal('status');
+                $tujuan = [
+                    self::MENUNGGU => [self::TERSEDIA, self::DITOLAK],
+                    self::TERSEDIA => [self::TERSEDIA, self::DIHAPUS],
+                    self::DIHAPUS => [self::TERSEDIA],
+                    self::DITOLAK => []
+                ];
+                if (
+                    $file->isDirty(self::IDENTITAS) || ! in_array($file->status, $tujuan[$asal] ?? [], true)
+                    || $file->revisi !== (int) $file->getRawOriginal('revisi') + 1
+                    || ($asal === self::TERSEDIA && $file->status === self::TERSEDIA && ! $file->isDirty(['label', 'keterangan']))
+                ) {
+                    throw new LogicException('Identitas berkas tetap; perubahan/transisi harus sah dan menaikkan revisi.');
+                }
+                if ($asal !== self::MENUNGGU && $file->isDirty('tersedia_at')) {
+                    throw new LogicException('Waktu ketersediaan pertama tidak boleh diubah.');
+                }
+            }
+            $siap = in_array($file->status, [self::TERSEDIA, self::DIHAPUS], true);
+            if ($siap !== ($file->tersedia_at !== null) || ($file->status === self::DIHAPUS) !== ($file->dinonaktifkan_at !== null)) {
+                throw new LogicException('Status dan waktu berkas tidak sesuai.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Berkas tidak dihapus fisik melalui model. Gunakan nonaktifkan.');
+        });
+    }
+    public function pengunggah(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'diunggah_oleh');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'berkas');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'berkas:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function labelStatus(): string
+    {
+        return self::STATUS[$this->status];
+    }
+    public function ukuranLabel(): string
+    {
+        return number_format($this->ukuran_byte / 1048576, 2, ',', '.') . ' MB';
+    }
+    public function ringkasanAudit(): array
+    {
+        return $this->only([
+            'diunggah_oleh',
+            'nama_asli',
+            'label',
+            'keterangan',
+            'mime_type',
+            'ekstensi',
+            'ukuran_byte',
+            'sha256',
+            'pemeriksaan',
+            'diperiksa_at',
+            'status',
+            'pesan_status',
+            'tersedia_at',
+            'dinonaktifkan_at',
+            'revisi'
+        ]);
+    }
+
+    public function materiLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\MateriBerkas::class, 'berkas_id');
+    }
+
+    public function kegiatanLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\KegiatanBerkas::class, 'berkas_id');
+    }
+
+    public function pengumpulanLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PengumpulanBerkas::class, 'berkas_id');
+    }
+
+    public function pembayaran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\Pembayaran::class, 'bukti_berkas_id');
+    }
+    public function lampiranPermohonanSurat(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PermohonanSurat::class, 'lampiran_berkas_id');
+    }
+    public function hasilPermohonanSurat(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PermohonanSurat::class, 'hasil_berkas_id');
+    }
+}
+
+
+================================================================================
+FILE: .\app\Models\Materi.php
+================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
+
+class Materi extends Model
+{
+    public const DRAF = 'draf';
+    public const TERBIT = 'terbit';
+    public const ARSIP = 'arsip';
+    public const STATUS = ['draf' => 'Draf', 'terbit' => 'Terbit', 'arsip' => 'Arsip'];
+    protected $table = 'materi';
+    protected $guarded = ['*'];
+    protected $hidden = ['form_token', 'hash_permohonan'];
+
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kelas_kuliah_id' => 'integer',
+            'pertemuan_id' => 'integer',
+            'pembuat_id' => 'integer',
+            'revisi' => 'integer',
+            'terbit_at' => 'immutable_datetime',
+            'diarsipkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $m): void {
+            if (
+                $m->getConnection()->transactionLevel() < 1 || blank($m->judul)
+                || mb_strlen($m->judul) > 200 || ! isset(self::STATUS[$m->status])
+                || $m->revisi < 1 || $m->revisi > 4294967295
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $m->hash_permohonan)
+            ) {
+                throw new LogicException('Materi harus valid dan disimpan melalui KelolaMateri.');
+            }
+            if (($m->status === self::DRAF && $m->terbit_at !== null)
+                || ($m->status === self::TERBIT && $m->terbit_at === null)
+                || (($m->status === self::ARSIP) !== ($m->diarsipkan_at !== null))
+            ) {
+                throw new LogicException('Status dan waktu materi tidak sesuai.');
+            }
+            if (! $m->exists) {
+                if ($m->status !== self::DRAF || $m->revisi !== 1) {
+                    throw new LogicException('Materi baru harus draf, revisi pertama.');
+                }
+                return;
+            }
+            $asal = $m->getRawOriginal('status');
+            $transisi = [
+                self::DRAF => [self::DRAF, self::TERBIT, self::ARSIP],
+                self::TERBIT => [self::DRAF, self::ARSIP],
+                self::ARSIP => [self::DRAF]
+            ];
+            if (
+                $m->isDirty(['kelas_kuliah_id', 'pembuat_id', 'form_token', 'hash_permohonan'])
+                || $m->revisi !== (int) $m->getRawOriginal('revisi') + 1
+                || ! in_array($m->status, $transisi[$asal] ?? [], true)
+            ) {
+                throw new LogicException('Identitas materi tetap; transisi dan revisi harus sah.');
+            }
+            if (
+                ! ($asal === self::DRAF && $m->status === self::DRAF)
+                && $m->isDirty(['judul', 'isi', 'tautan_eksternal', 'pertemuan_id'])
+            ) {
+                throw new LogicException('Tarik materi menjadi draf sebelum mengubah isi.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Gunakan arsip; materi tidak dihapus.');
+        });
+    }
+
+    public function kelasKuliah(): BelongsTo
+    {
+        return $this->belongsTo(KelasKuliah::class, 'kelas_kuliah_id');
+    }
+    public function pertemuan(): BelongsTo
+    {
+        return $this->belongsTo(Pertemuan::class, 'pertemuan_id');
+    }
+    public function pembuat(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'pembuat_id');
+    }
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(MateriBerkas::class, 'materi_id')->where('aktif', true);
+    }
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(MateriBerkas::class, 'materi_id');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'materi');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'materi:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function sudahTerbit(): bool
+    {
+        return $this->status === self::TERBIT && $this->terbit_at !== null && $this->terbit_at->lte(now('UTC'));
+    }
+    public function ringkasanAudit(): array
+    {
+        return [
+            ...$this->only([
+                'kelas_kuliah_id',
+                'pertemuan_id',
+                'pembuat_id',
+                'judul',
+                'isi',
+                'tautan_eksternal',
+                'status',
+                'terbit_at',
+                'diarsipkan_at',
+                'revisi'
+            ]),
+            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Models\Kegiatan.php
+================================================================================
+<?php
+
+namespace App\Models;
+
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
+
+class Kegiatan extends Model
+{
+    public const DRAF = 'draf';
+    public const TERBIT = 'terbit';
+    public const DITUTUP = 'ditutup';
+    public const ARSIP = 'arsip';
+    public const STATUS = ['draf' => 'Draf', 'terbit' => 'Terbit', 'ditutup' => 'Ditutup', 'arsip' => 'Arsip'];
+    public const JENIS = ['tugas' => 'Tugas', 'latihan' => 'Latihan', 'uts' => 'UTS', 'uas' => 'UAS'];
+    public const ISI_TETAP = [
+        'pertemuan_id',
+        'jenis',
+        'metode',
+        'judul',
+        'instruksi',
+        'buka_at',
+        'maks_ukuran_byte',
+        'maks_berkas',
+        'ekstensi_diizinkan'
+    ];
+    protected $table = 'kegiatan';
+    protected $guarded = ['*'];
+    protected $hidden = ['form_token', 'hash_permohonan', 'instruksi'];
+
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kelas_kuliah_id' => 'integer',
+            'pertemuan_id' => 'integer',
+            'pembuat_id' => 'integer',
+            'maks_ukuran_byte' => 'integer',
+            'maks_berkas' => 'integer',
+            'ekstensi_diizinkan' => 'array',
+            'revisi' => 'integer',
+            'buka_at' => 'immutable_datetime',
+            'tenggat_at' => 'immutable_datetime',
+            'terbit_at' => 'immutable_datetime',
+            'ditutup_at' => 'immutable_datetime',
+            'diarsipkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $k): void {
+            if (
+                $k->getConnection()->transactionLevel() < 1 || blank($k->judul) || mb_strlen($k->judul) > 200
+                || blank($k->instruksi) || mb_strlen($k->instruksi) > 10000
+                || ! isset(self::JENIS[$k->jenis]) || ! isset(self::STATUS[$k->status])
+                || $k->metode !== 'pengumpulan_berkas' || $k->revisi < 1 || $k->revisi > 4294967295
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $k->hash_permohonan)
+            ) {
+                throw new LogicException('Kegiatan harus valid dan ditulis melalui KelolaKegiatan.');
+            }
+            if (
+                ! $k->buka_at || ! $k->tenggat_at || ! $k->buka_at->lt($k->tenggat_at)
+                || $k->maks_berkas < 1 || $k->maks_berkas > 5 || $k->maks_ukuran_byte < 1048576 || $k->maks_ukuran_byte > 20971520
+                || ! is_array($k->ekstensi_diizinkan) || count($k->ekstensi_diizinkan) < 1
+                || array_diff($k->ekstensi_diizinkan, ['pdf', 'jpg', 'png']) !== []
+                || count(array_unique($k->ekstensi_diizinkan)) !== count($k->ekstensi_diizinkan)
+            ) {
+                throw new LogicException('Jadwal atau batas jawaban tidak valid.');
+            }
+            $valid = match ($k->status) {
+                self::DRAF => $k->terbit_at === null && $k->ditutup_at === null && $k->diarsipkan_at === null,
+                self::TERBIT => $k->terbit_at !== null && $k->ditutup_at === null && $k->diarsipkan_at === null,
+                self::DITUTUP => $k->terbit_at !== null && $k->ditutup_at !== null && $k->diarsipkan_at === null,
+                self::ARSIP => $k->diarsipkan_at !== null,
+            };
+            if (! $valid) {
+                throw new LogicException('Status dan waktu kegiatan tidak sesuai.');
+            }
+            if (! $k->exists) {
+                if ($k->status !== self::DRAF || $k->revisi !== 1) {
+                    throw new LogicException('Kegiatan baru harus draf, revisi satu.');
+                }
+                return;
+            }
+            $asal = $k->getRawOriginal('status');
+            $transisi = [
+                self::DRAF => [self::DRAF, self::TERBIT, self::ARSIP],
+                self::TERBIT => [self::TERBIT, self::DITUTUP, self::ARSIP],
+                self::DITUTUP => [self::DITUTUP, self::TERBIT, self::ARSIP],
+                self::ARSIP => [self::DRAF, self::DITUTUP]
+            ];
+            if (
+                $k->isDirty(['kelas_kuliah_id', 'pembuat_id', 'form_token', 'hash_permohonan'])
+                || $k->revisi !== (int) $k->getRawOriginal('revisi') + 1
+                || ! in_array($k->status, $transisi[$asal] ?? [], true)
+            ) {
+                throw new LogicException('Identitas tetap; revisi dan transisi harus sesuai.');
+            }
+            if ($k->getRawOriginal('terbit_at') !== null) {
+                if ($k->isDirty([...self::ISI_TETAP, 'terbit_at']) || $k->status === self::DRAF) {
+                    throw new LogicException('Isi dan aturan kegiatan dikunci sejak penerbitan pertama.');
+                }
+                if ($k->isDirty('tenggat_at') && ! $k->tenggat_at->gt(CarbonImmutable::parse($k->getRawOriginal('tenggat_at'), 'UTC'))) {
+                    throw new LogicException('Tenggat hanya boleh diperpanjang.');
+                }
+            } elseif (
+                ! ($asal === self::DRAF && $k->status === self::DRAF)
+                && $k->isDirty([...self::ISI_TETAP, 'tenggat_at'])
+            ) {
+                throw new LogicException('Ubah isi melalui edit draf sebelum menerbitkan.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Gunakan arsip; kegiatan tidak dihapus.');
+        });
+    }
+    public function kelasKuliah(): BelongsTo
+    {
+        return $this->belongsTo(KelasKuliah::class, 'kelas_kuliah_id');
+    }
+    public function pertemuan(): BelongsTo
+    {
+        return $this->belongsTo(Pertemuan::class, 'pertemuan_id');
+    }
+    public function pembuat(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'pembuat_id');
+    }
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(KegiatanBerkas::class, 'kegiatan_id')->where('aktif', true);
+    }
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(KegiatanBerkas::class, 'kegiatan_id');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'kegiatan');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'kegiatan:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    // Ini hanya pemeriksaan status/waktu, BUKAN pengganti otorisasi peserta ketika pengumpulan dibuat.
+    public function jendelaTerbuka(?CarbonImmutable $waktu = null): bool
+    {
+        $waktu ??= CarbonImmutable::now('UTC');
+        return $this->status === self::TERBIT && $this->terbit_at !== null && $this->terbit_at->lte($waktu)
+            && $this->buka_at !== null && $this->tenggat_at !== null && $this->buka_at->lte($waktu) && $waktu->lt($this->tenggat_at);
+    }
+    public function labelJadwal(): string
+    {
+        if ($this->status === self::DRAF) {
+            return 'Draf';
+        }
+        if ($this->status === self::ARSIP) {
+            return 'Arsip';
+        }
+        if ($this->status === self::DITUTUP) {
+            return 'Ditutup oleh pengajar';
+        }
+        if (now('UTC')->lt($this->buka_at)) {
+            return 'Belum mulai';
+        }
+        return $this->jendelaTerbuka() ? 'Dalam jadwal pengumpulan' : 'Tenggat telah lewat';
+    }
+    public function ringkasanAudit(): array
+    {
+        return [
+            ...$this->only([
+                'kelas_kuliah_id',
+                'pertemuan_id',
+                'pembuat_id',
+                ...self::ISI_TETAP,
+                'tenggat_at',
+                'status',
+                'terbit_at',
+                'ditutup_at',
+                'diarsipkan_at',
+                'revisi'
+            ]),
+            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+        ];
+    }
+
+    public function pengumpulan(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\Pengumpulan::class, 'kegiatan_id');
+    }
+}
+
+
+================================================================================
+FILE: .\app\Models\Pengumpulan.php
+================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
+use LogicException;
+
+class Pengumpulan extends Model
+{
+    public const DRAF = 'draf';
+    public const DIKIRIM = 'dikirim';
+    public const STATUS = ['draf' => 'Draf â€” belum dikumpulkan', 'dikirim' => 'Sudah dikumpulkan'];
+    protected $table = 'pengumpulan';
+    protected $guarded = ['*'];
+    protected $hidden = ['token_draf', 'kunci_kirim', 'jawaban_teks'];
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kegiatan_id' => 'integer',
+            'detail_krs_id' => 'integer',
+            'pemilik_id' => 'integer',
+            'versi' => 'integer',
+            'penanda_draf' => 'integer',
+            'revisi' => 'integer',
+            'revisi_kegiatan' => 'integer',
+            'dikirim_at' => 'immutable_datetime',
+            'tenggat_snapshot' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $p): void {
+            if (
+                $p->getConnection()->transactionLevel() < 1 || ! isset(self::STATUS[$p->status])
+                || $p->versi < 1 || $p->versi > 4294967295 || $p->revisi < 1 || $p->revisi > 4294967295
+                || $p->kegiatan_id < 1 || $p->detail_krs_id < 1 || $p->pemilik_id < 1
+                || ! Str::isUuid((string) $p->token_draf) || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $p->kunci_kirim)
+                || mb_strlen((string) $p->jawaban_teks) > 10000
+            ) {
+                throw new LogicException('Pengumpulan harus valid dan ditulis melalui KelolaPengumpulan.');
+            }
+            if ($p->status === self::DRAF) {
+                if (
+                    $p->penanda_draf !== 1 || $p->dikirim_at !== null || $p->tenggat_snapshot !== null
+                    || $p->revisi_kegiatan !== null || $p->hash_jawaban !== null
+                ) {
+                    throw new LogicException('Draf tidak mempunyai metadata kiriman final.');
+                }
+            } elseif (
+                $p->penanda_draf !== null || $p->dikirim_at === null || $p->tenggat_snapshot === null
+                || ! $p->dikirim_at->lt($p->tenggat_snapshot) || $p->revisi_kegiatan < 1
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $p->hash_jawaban)
+            ) {
+                throw new LogicException('Metadata kiriman final tidak lengkap.');
+            }
+            if (! $p->exists) {
+                if ($p->status !== self::DRAF || $p->revisi !== 1) {
+                    throw new LogicException('Versi baru harus draf, revisi satu.');
+                }
+                return;
+            }
+            if (
+                $p->getRawOriginal('status') !== self::DRAF
+                || $p->isDirty(['kegiatan_id', 'detail_krs_id', 'pemilik_id', 'versi', 'token_draf', 'kunci_kirim'])
+                || $p->revisi !== (int) $p->getRawOriginal('revisi') + 1
+            ) {
+                throw new LogicException('Identitas dan jawaban yang dikirim tidak boleh diubah.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Riwayat pengumpulan tidak dihapus.');
+        });
+    }
+    public function kegiatan(): BelongsTo
+    {
+        return $this->belongsTo(Kegiatan::class, 'kegiatan_id');
+    }
+    public function detailKrs(): BelongsTo
+    {
+        return $this->belongsTo(DetailKrs::class, 'detail_krs_id');
+    }
+    public function pemilik(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'pemilik_id');
+    }
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(PengumpulanBerkas::class, 'pengumpulan_id')->where('aktif', true);
+    }
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(PengumpulanBerkas::class, 'pengumpulan_id');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'pengumpulan');
+    }
+    public function scopeBerlaku(Builder $q): Builder
+    {
+        return $q->where('pengumpulan.status', self::DIKIRIM)->whereNotExists(function ($sub): void {
+            $sub->selectRaw('1')->from('pengumpulan as lebih_baru')->whereColumn('lebih_baru.kegiatan_id', 'pengumpulan.kegiatan_id')
+                ->whereColumn('lebih_baru.detail_krs_id', 'pengumpulan.detail_krs_id')->where('lebih_baru.status', self::DIKIRIM)
+                ->whereColumn('lebih_baru.versi', '>', 'pengumpulan.versi');
+        });
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'pengumpulan:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function hitungHash(): string
+    {
+        $files = $this->lampiran()->orderBy('berkas_id')->get()->map(fn(PengumpulanBerkas $b) =>
+        $b->only(['berkas_id', 'nama_asli', 'mime_type', 'ekstensi', 'ukuran_byte', 'sha256']))->all();
+        return hash('sha256', json_encode([
+            'kegiatan' => $this->kegiatan_id,
+            'peserta' => $this->detail_krs_id,
+            'versi' => $this->versi,
+            'jawaban' => $this->jawaban_teks,
+            'berkas' => $files
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+    }
+    public function ringkasanAudit(): array
+    {
+        // Jangan menyalin teks jawaban, kunci kirim, atau lokasi cloud ke audit umum.
+        return [
+            ...$this->only([
+                'kegiatan_id',
+                'detail_krs_id',
+                'pemilik_id',
+                'versi',
+                'status',
+                'revisi',
+                'dikirim_at',
+                'tenggat_snapshot',
+                'revisi_kegiatan',
+                'hash_jawaban'
+            ]),
+            'panjang_teks' => mb_strlen((string) $this->jawaban_teks),
+            'hash_isi' => $this->hitungHash(),
+            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\routes\web.php
+================================================================================
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Http\Middleware\EnsureRoleManagementAccess;
+use App\Http\Middleware\AuthenticatePresensi;
+
+// Import Controllers
+
+use App\Http\Controllers\Auth\PortalSessionController;
+use App\Http\Controllers\DosenController;
+use App\Http\Controllers\KurikulumController;
+use App\Http\Controllers\MataKuliahController;
+use App\Http\Controllers\PeriodeAkademikController;
+use App\Http\Controllers\ProgramStudiController;
+use App\Http\Controllers\RiwayatStudiController;
+use App\Http\Controllers\RoleController;
+use App\Http\Controllers\UserController;
+use App\Http\Controllers\PaketSemesterController;
+use App\Http\Controllers\RombelController;
+use App\Http\Controllers\MahasiswaController;
+use App\Http\Controllers\RegistrasiSemesterController;
+use App\Http\Controllers\KelasKuliahController;
+use App\Http\Controllers\KrsController;
+use App\Http\Controllers\PortalKrsController;
+use App\Http\Controllers\PortalJadwalController;
+use App\Http\Controllers\PengajarKelasController;
+use App\Http\Controllers\JadwalKuliahController;
+use App\Http\Controllers\PertemuanController;
+use App\Http\Controllers\PresensiController;
+
+// Pintu masuk tunggal seluruh pengguna.
+Route::controller(PortalSessionController::class)
+    ->middleware('cache.headers:no_store;private')
+    ->group(function (): void {
+        Route::get('/', 'home')->name('home');
+        Route::get('/login', 'create')->name('login');
+        Route::post('/login', 'store')
+            ->middleware('throttle:portal-login')
+            ->name('login.store');
+    });
+
+Route::post('/logout', [PortalSessionController::class, 'destroy'])
+    ->middleware(['auth:web', 'auth.session', 'throttle:30,1', 'cache.headers:no_store;private'])
+    ->name('logout');
+
+// Kompatibilitas alamat lama. Semua autentikasi tetap diproses oleh pintu tunggal.
+Route::middleware('cache.headers:no_store;private')->group(function (): void {
+    Route::redirect('/login/dosen', '/login')->name('presensi.login');
+    Route::post('/login/dosen', [PortalSessionController::class, 'store'])
+        ->middleware('throttle:portal-login')
+        ->name('presensi.login.store');
+
+    Route::redirect('/login/berkas', '/login')->name('berkas.login');
+    Route::post('/login/berkas', [PortalSessionController::class, 'store'])
+        ->middleware('throttle:portal-login')
+        ->name('berkas.login.store');
+});
+
+// Portal KRS mahasiswa.
+Route::controller(PortalKrsController::class)
+    ->prefix('krs-saya')
+    ->name('portal.krs.')
+    ->middleware([
+        'auth:web',
+        'auth.session',
+        'cache.headers:no_store;private',
+    ])
+    ->where([
+        'krs' => '[0-9]+',
+    ])
+    ->group(function (): void {
+        Route::get('/', 'index')
+            ->name('index');
+
+        Route::get('/{krs}/cetak', 'cetak')
+            ->middleware('throttle:30,1')
+            ->name('cetak');
+
+        Route::get('/{krs}', 'show')
+            ->name('show');
+    });
+
+// Portal jadwal kuliah mahasiswa.
+Route::controller(PortalJadwalController::class)
+    ->prefix('jadwal-saya')
+    ->name('portal.jadwal.')
+    ->middleware([
+        'auth:web',
+        'auth.session',
+        'cache.headers:no_store;private',
+    ])
+    ->where([
+        'jadwalKuliah' => '[0-9]+',
+    ])
+    ->group(function (): void {
+        Route::get('/', 'index')
+            ->name('index');
+
+        Route::get('/{jadwalKuliah}', 'show')
+            ->name('show');
+    });
+
+Route::middleware([
+    'auth:web',
+    'auth.session',
+    'cache.headers:no_store;private',
+])
+    ->prefix('presensi-saya')
+    ->name('portal.presensi.')
+    ->group(function (): void {
+        Route::get(
+            '/',
+            [\App\Http\Controllers\PortalPresensiMahasiswaController::class, 'index']
+        )->name('index');
+
+        Route::get(
+            '/{presensi}',
+            [\App\Http\Controllers\PortalPresensiMahasiswaController::class, 'show']
+        )
+            ->whereNumber('presensi')
+            ->name('show');
+    });
+
+Route::middleware([
+    'auth:web',
+    'auth.session',
+    'cache.headers:no_store;private',
+])
+    ->prefix('profil-saya')
+    ->name('portal.profil.')
+    ->group(function (): void {
+        Route::get(
+            '/',
+            [
+                \App\Http\Controllers\PortalProfilMahasiswaController::class,
+                'show',
+            ]
+        )->name('show');
+
+        Route::get(
+            '/edit',
+            [
+                \App\Http\Controllers\PortalProfilMahasiswaController::class,
+                'edit',
+            ]
+        )->name('edit');
+
+        Route::patch(
+            '/',
+            [
+                \App\Http\Controllers\PortalProfilMahasiswaController::class,
+                'update',
+            ]
+        )->name('update');
+    });
+
+
+// ==========================================================
+// GRUP UTAMA ADMIN
+// (Semua route di dalam ini otomatis memiliki URL /admin/... 
+// dan name admin....)
+// ==========================================================
+Route::prefix('admin')
+    ->name('admin.')
+    ->middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private'])
+    ->group(function (): void {
+
+        // Peran
+        Route::controller(RoleController::class)->prefix('roles')->name('roles.')
+            ->middleware(['can:kelola-peran', EnsureRoleManagementAccess::class])
+            ->where(['role' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/{role}', 'show')->name('show');
+                Route::get('/{role}/edit', 'edit')->name('edit');
+                Route::patch('/{role}', 'update')->middleware('throttle:30,1')->name('update');
+            });
+
+        // Pengguna
+        Route::controller(UserController::class)->prefix('users')->name('users.')
+            ->middleware('can:kelola-pengguna')->where(['user' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{user}', 'show')->name('show');
+                Route::get('/{user}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{user}', 'update')->name('update');
+                    Route::delete('/{user}', 'destroy')->name('destroy');
+                });
+            });
+
+        // Program Studi
+        Route::controller(ProgramStudiController::class)->prefix('program-studi')->name('program-studi.')
+            ->middleware('can:kelola-program-studi')->where(['programStudi' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{programStudi}', 'show')->name('show');
+                Route::get('/{programStudi}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{programStudi}', 'update')->name('update');
+                });
+            });
+
+        // Periode Akademik
+        Route::controller(PeriodeAkademikController::class)->prefix('periode-akademik')->name('periode-akademik.')
+            ->middleware('can:kelola-periode-akademik')->where(['periodeAkademik' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{periodeAkademik}', 'show')->name('show');
+                Route::get('/{periodeAkademik}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{periodeAkademik}', 'update')->name('update');
+                });
+            });
+
+        // Kurikulum
+        Route::controller(KurikulumController::class)->prefix('kurikulum')->name('kurikulum.')
+            ->middleware('can:kelola-kurikulum')->where(['kurikulum' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{kurikulum}', 'show')->name('show');
+                Route::get('/{kurikulum}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{kurikulum}', 'update')->name('update');
+                });
+            });
+        // Susunan Mata Kuliah Kurikulum
+        Route::controller(\App\Http\Controllers\KurikulumMataKuliahController::class)
+            ->prefix('kurikulum/{kurikulum}/mata-kuliah')
+            ->name('kurikulum.mata-kuliah.')
+            ->middleware('can:kelola-kurikulum')
+            ->where([
+                'kurikulum' => '[0-9]+',
+                'detail' => '[0-9]+',
+            ])
+            ->scopeBindings()
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{detail}', 'show')->name('show');
+                Route::get('/{detail}/edit', 'edit')->name('edit');
+
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{detail}', 'update')->name('update');
+                    Route::delete('/{detail}', 'destroy')->name('destroy');
+                });
+            });
+
+
+        // Mata Kuliah
+        Route::controller(MataKuliahController::class)->prefix('mata-kuliah')->name('mata-kuliah.')
+            ->middleware('can:kelola-mata-kuliah')->where(['mataKuliah' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{mataKuliah}', 'show')->name('show');
+                Route::get('/{mataKuliah}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{mataKuliah}', 'update')->name('update');
+                });
+            });
+
+        // Dosen
+        Route::controller(DosenController::class)->prefix('dosen')->name('dosen.')
+            ->middleware('can:kelola-dosen')->where(['dosen' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{dosen}', 'show')->name('show');
+                Route::get('/{dosen}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{dosen}', 'update')->name('update');
+                });
+            });
+
+        // Riwayat Studi
+        Route::controller(RiwayatStudiController::class)->prefix('riwayat-studi')->name('riwayat-studi.')
+            ->middleware('can:kelola-riwayat-studi')->where(['riwayatStudi' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{riwayatStudi}', 'show')->name('show');
+                Route::get('/{riwayatStudi}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{riwayatStudi}', 'update')->name('update');
+                });
+            });
+
+        // Mahasiswa
+        Route::controller(MahasiswaController::class)->prefix('mahasiswa')->name('mahasiswa.')
+            ->middleware('can:kelola-mahasiswa')->where(['mahasiswa' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{mahasiswa}', 'show')->name('show');
+                Route::get('/{mahasiswa}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{mahasiswa}', 'update')->name('update');
+                });
+            });
+
+        // Paket Semester (Diperbaiki: Dibuang kata 'admin' dari prefix & name karena sudah mewarisi grup induk)
+        Route::controller(PaketSemesterController::class)->prefix('paket-semester')->name('paket-semester.')
+            ->middleware('can:kelola-paket-semester')->where(['paketSemester' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{paketSemester}', 'show')->name('show');
+                Route::get('/{paketSemester}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{paketSemester}', 'update')->name('update');
+                    Route::post('/{paketSemester}/terbitkan', 'terbitkan')->name('terbitkan');
+                    Route::post('/{paketSemester}/arsipkan', 'arsipkan')->name('arsipkan');
+                });
+            });
+
+        // Rombel (Diperbaiki)
+        Route::controller(RombelController::class)->prefix('rombel')->name('rombel.')
+            ->middleware('can:kelola-rombel')->where(['rombel' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{rombel}', 'show')->name('show');
+                Route::get('/{rombel}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{rombel}', 'update')->name('update');
+                });
+            });
+
+        // Registrasi Semester (Diperbaiki)
+        Route::controller(RegistrasiSemesterController::class)->prefix('registrasi-semester')->name('registrasi-semester.')
+            ->middleware('can:kelola-registrasi-semester')->where(['registrasiSemester' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{registrasiSemester}', 'show')->name('show');
+                Route::get('/{registrasiSemester}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{registrasiSemester}', 'update')->name('update');
+                });
+            });
+
+        // Kelas Kuliah (Diperbaiki)
+        Route::controller(KelasKuliahController::class)->prefix('kelas-kuliah')->name('kelas-kuliah.')
+            ->middleware('can:kelola-kelas-kuliah')->where(['kelasKuliah' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{kelasKuliah}', 'show')->name('show');
+                Route::get('/{kelasKuliah}/edit', 'edit')->name('edit');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{kelasKuliah}', 'update')->name('update');
+                });
+            });
+
+        // KRS (Diperbaiki)
+        Route::controller(KrsController::class)->prefix('krs')->name('krs.')
+            ->middleware('can:kelola-krs')->where(['krs' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{krs}/cetak', 'cetak')->name('cetak');
+                Route::get('/{krs}/edit', 'edit')->name('edit');
+                Route::get('/{krs}', 'show')->name('show');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{krs}', 'update')->name('update');
+                    Route::post('/{krs}/ajukan', 'ajukan')->name('ajukan');
+                    Route::post('/{krs}/kembalikan', 'kembalikan')->name('kembalikan');
+                    Route::post('/{krs}/sahkan', 'sahkan')->name('sahkan');
+                    Route::post('/{krs}/revisi', 'revisi')->name('revisi');
+                    Route::post('/{krs}/pulihkan', 'pulihkan')->name('pulihkan');
+                    Route::post('/{krs}/batalkan', 'batalkan')->name('batalkan');
+                });
+            });
+
+        // Pengajar Kelas (Diperbaiki)
+        Route::controller(PengajarKelasController::class)->prefix('pengajar-kelas')->name('pengajar-kelas.')
+            ->middleware('can:kelola-pengajar-kelas')->where(['pengajarKelas' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{pengajarKelas}/edit', 'edit')->name('edit');
+                Route::get('/{pengajarKelas}', 'show')->name('show');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{pengajarKelas}', 'update')->name('update');
+                });
+            });
+
+        // Jadwal Kuliah (Diperbaiki)
+        Route::controller(JadwalKuliahController::class)->prefix('jadwal-kuliah')->name('jadwal-kuliah.')
+            ->middleware('can:kelola-jadwal-kuliah')->where(['jadwalKuliah' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{jadwalKuliah}/edit', 'edit')->name('edit');
+                Route::get('/{jadwalKuliah}', 'show')->name('show');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{jadwalKuliah}', 'update')->name('update');
+                    Route::post('/{jadwalKuliah}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+                });
+            });
+
+        // Pertemuan (Diperbaiki)
+        Route::controller(PertemuanController::class)->prefix('pertemuan')->name('pertemuan.')
+            ->middleware('can:kelola-pertemuan')->where(['pertemuan' => '[0-9]+'])->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/create', 'create')->name('create');
+                Route::get('/{pertemuan}/edit', 'edit')->name('edit');
+                Route::get('/{pertemuan}', 'show')->name('show');
+                Route::middleware('throttle:30,1')->group(function (): void {
+                    Route::post('/', 'store')->name('store');
+                    Route::patch('/{pertemuan}', 'update')->name('update');
+                    Route::post('/{pertemuan}/mulai', 'mulai')->name('mulai');
+                    Route::post('/{pertemuan}/selesai', 'selesai')->name('selesai');
+                    Route::post('/{pertemuan}/batalkan', 'batalkan')->name('batalkan');
+                    Route::post('/{pertemuan}/pulihkan', 'pulihkan')->name('pulihkan');
+                });
+            });
+    });
+
+// ==========================================================
+// GRUP PRESENSI (Di luar admin)
+// ==========================================================
+Route::prefix('presensi')->name('presensi.')
+    ->middleware([AuthenticatePresensi::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
+    ->group(function (): void {
+        Route::post('/logout', [PortalSessionController::class, 'destroy'])
+            ->middleware('throttle:30,1')->name('logout');
+
+        Route::controller(PresensiController::class)
+            ->middleware('can:akses-presensi')->where(['pertemuan' => '[0-9]+', 'presensi' => '[0-9]+'])
+            ->group(function (): void {
+                Route::get('/', 'index')->name('index');
+                Route::get('/{pertemuan}', 'show')->name('show');
+                Route::get('/{pertemuan}/peserta/{presensi}/edit', 'edit')->name('edit');
+                Route::get('/{pertemuan}/peserta/{presensi}/audit', 'audit')->name('audit');
+
+                Route::middleware('throttle:presensi-tulis')->group(function (): void {
+                    Route::post('/{pertemuan}/siapkan', 'siapkan')->name('siapkan');
+                    Route::patch('/{pertemuan}/peserta/{presensi}', 'catat')->name('catat');
+                    Route::patch('/{pertemuan}/peserta/{presensi}/koreksi', 'koreksi')->name('koreksi');
+                    Route::post('/{pertemuan}/tutup', 'tutup')->name('tutup');
+                    Route::post('/{pertemuan}/mulai', 'mulai')->name('mulai');
+                    Route::post('/{pertemuan}/selesai', 'selesai')->name('selesai');
+                });
+            });
+    });
+Route::middleware([
+    'auth:web',
+    'auth.session',
+    'cache.headers:no_store;private',
+])
+    ->prefix('dosen/kelas-saya')
+    ->name('portal.dosen.kelas.')
+    ->group(function (): void {
+        Route::get(
+            '/',
+            [
+                \App\Http\Controllers\PortalKelasDosenController::class,
+                'index',
+            ]
+        )->name('index');
+
+        Route::get(
+            '/{kelas}',
+            [
+                \App\Http\Controllers\PortalKelasDosenController::class,
+                'show',
+            ]
+        )
+            ->whereNumber('kelas')
+            ->name('show');
+    });
+Route::middleware([
+    'auth:web',
+    'auth.session',
+    'cache.headers:no_store;private',
+])
+    ->get(
+        '/dosen/kelas-saya/{kelas}/peserta',
+        [
+            \App\Http\Controllers\PortalPesertaKelasDosenController::class,
+            'index',
+        ]
+    )
+    ->whereNumber('kelas')
+    ->name('portal.dosen.peserta.index');
+
+\Illuminate\Support\Facades\Route::prefix('berkas')->name('berkas.')
+    ->middleware([\App\Http\Middleware\AuthenticateBerkas::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::post('/logout', [PortalSessionController::class, 'destroy'])
+            ->middleware('throttle:30,1')->name('logout');
+        \Illuminate\Support\Facades\Route::controller(\App\Http\Controllers\BerkasController::class)
+            ->middleware('can:akses-berkas')->where(['berkas' => '[0-9]+'])->group(function (): void {
+                \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+                \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+                \Illuminate\Support\Facades\Route::post('/', 'store')->middleware('throttle:berkas-upload')->name('store');
+                \Illuminate\Support\Facades\Route::get('/{berkas}', 'show')->name('show');
+                \Illuminate\Support\Facades\Route::get('/{berkas}/edit', 'edit')->name('edit');
+                \Illuminate\Support\Facades\Route::get('/{berkas}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
+                \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+                    \Illuminate\Support\Facades\Route::patch('/{berkas}', 'update')->name('update');
+                    \Illuminate\Support\Facades\Route::post('/{berkas}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+                    \Illuminate\Support\Facades\Route::post('/{berkas}/pulihkan', 'pulihkan')->name('pulihkan');
+                    \Illuminate\Support\Facades\Route::post('/{berkas}/tautan-unduh', 'tautan')->name('tautan');
+                });
+            });
+    });
+
+Route::middleware([
+    'auth:web',
+    'auth.session',
+    'cache.headers:no_store;private',
+])
+    ->get(
+        '/dosen/kelas-saya/{kelas}/peserta/{peserta}',
+        [
+            \App\Http\Controllers\PortalPesertaKelasDosenController::class,
+            'show',
+        ]
+    )
+    ->whereNumber('kelas')
+    ->whereNumber('peserta')
+    ->name('portal.dosen.peserta.show');
+
+// Tambahkan SEKALI di routes/web.php, di luar seluruh grup admin/presensi/berkas.
+\Illuminate\Support\Facades\Route::prefix('materi')->name('materi.')
+    ->middleware([
+        \App\Http\Middleware\AuthenticateMateri::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-materi'
+    ])
+    ->controller(\App\Http\Controllers\MateriController::class)
+    ->where(['materi' => '[0-9]+', 'lampiran' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/kelas', 'kelas')->name('kelas');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{materi}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{materi}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::get('/{materi}/lampiran/{lampiran}/unduh', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])->name('unduh');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{materi}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{materi}/terbitkan', 'terbitkan')->name('terbitkan');
+            \Illuminate\Support\Facades\Route::post('/{materi}/tarik', 'tarik')->name('tarik');
+            \Illuminate\Support\Facades\Route::post('/{materi}/arsipkan', 'arsipkan')->name('arsipkan');
+            \Illuminate\Support\Facades\Route::post('/{materi}/pulihkan', 'pulihkan')->name('pulihkan');
+            \Illuminate\Support\Facades\Route::post('/{materi}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
+        });
+    });
+// Tambahkan SEKALI di routes/web.php, di luar seluruh grup admin/presensi/berkas.
+\Illuminate\Support\Facades\Route::prefix('kegiatan')->name('kegiatan.')
+    ->middleware([
+        \App\Http\Middleware\AuthenticateKegiatan::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-kegiatan'
+    ])
+    ->controller(\App\Http\Controllers\KegiatanController::class)
+    ->where(['kegiatan' => '[0-9]+', 'lampiran' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/kelas', 'kelas')->name('kelas');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{kegiatan}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{kegiatan}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::get('/{kegiatan}/lampiran/{lampiran}/unduh', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])->name('unduh');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{kegiatan}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/terbitkan', 'terbitkan')->name('terbitkan');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/tutup', 'tutup')->name('tutup');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/buka-kembali', 'bukaKembali')->name('bukaKembali');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/perpanjang', 'perpanjang')->name('perpanjang');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/arsipkan', 'arsipkan')->name('arsipkan');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/pulihkan', 'pulihkan')->name('pulihkan');
+            \Illuminate\Support\Facades\Route::post('/{kegiatan}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
+        });
+    });
+// Tempel SEKALI di luar seluruh grup admin, kegiatan, berkas, dan materi.
+\Illuminate\Support\Facades\Route::prefix('pengumpulan')->name('pengumpulan.')
+    ->middleware([
+        \App\Http\Middleware\AuthenticatePengumpulan::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-pengumpulan'
+    ])
+    ->controller(\App\Http\Controllers\PengumpulanController::class)
+    ->where(['kegiatan' => '[0-9]+', 'pengumpulan' => '[0-9]+', 'lampiran' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/kegiatan/{kegiatan}/saya', 'saya')->name('saya');
+        \Illuminate\Support\Facades\Route::get('/kegiatan/{kegiatan}/rekap', 'rekap')->name('rekap');
+        \Illuminate\Support\Facades\Route::get('/{pengumpulan}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{pengumpulan}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::get('/{pengumpulan}/lampiran/{lampiran}/unduh', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])->name('unduh');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/kegiatan/{kegiatan}/draf', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{pengumpulan}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{pengumpulan}/kirim', 'kirim')->name('kirim');
+            \Illuminate\Support\Facades\Route::post('/{pengumpulan}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
+        });
+    });
+// Tempel SEKALI di routes/web.php, DI LUAR seluruh grup route lama.
+\Illuminate\Support\Facades\Route::prefix('keuangan/jenis-biaya')->name('keuangan.jenis-biaya.')
+    ->middleware([
+        \App\Http\Middleware\AuthenticateKeuangan::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-jenis-biaya'
+    ])
+    ->controller(\App\Http\Controllers\JenisBiayaController::class)
+    ->where(['jenisBiaya' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{jenisBiaya}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{jenisBiaya}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{jenisBiaya}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{jenisBiaya}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+            \Illuminate\Support\Facades\Route::post('/{jenisBiaya}/aktifkan', 'aktifkan')->name('aktifkan');
+        });
+    });
+
+// Tambahkan SEKALI, DI LUAR grup admin/keuangan lain di routes/web.php.
+\Illuminate\Support\Facades\Route::prefix('tagihan')->name('tagihan.')
+    ->middleware([
+        \App\Http\Middleware\AuthenticateKeuangan::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-tagihan'
+    ])
+    ->controller(\App\Http\Controllers\TagihanController::class)
+    ->where(['tagihan' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{tagihan}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{tagihan}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{tagihan}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{tagihan}/terbitkan', 'terbitkan')->name('terbitkan');
+            \Illuminate\Support\Facades\Route::post('/{tagihan}/batalkan', 'batalkan')->name('batalkan');
+            \Illuminate\Support\Facades\Route::post('/{tagihan}/buka-draf', 'bukaDraf')->name('buka-draf');
+        });
+    });
+
+// Tempel SEKALI di routes/web.php, DI LUAR semua grup route lama.
+\Illuminate\Support\Facades\Route::prefix('pembayaran')->name('pembayaran.')
+    ->middleware([\App\Http\Middleware\AuthenticateKeuangan::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-pembayaran'])
+    ->controller(\App\Http\Controllers\PembayaranController::class)
+    ->where(['tagihan' => '[0-9]+', 'pembayaran' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/tagihan/{tagihan}/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{pembayaran}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{pembayaran}/bukti', 'tautan')->middleware('throttle:30,1')->name('tautan');
+        \Illuminate\Support\Facades\Route::get('/{pembayaran}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
+        \Illuminate\Support\Facades\Route::middleware(
+            'throttle:10,1'
+        )->group(function (): void {
+            \Illuminate\Support\Facades\Route::post(
+                '/tagihan/{tagihan}',
+                'store'
+            )->name('store');
+
+            \Illuminate\Support\Facades\Route::post(
+                '/{pembayaran}/batalkan',
+                'batalkan'
+            )->name('batalkan');
+
+            \Illuminate\Support\Facades\Route::post(
+                '/{pembayaran}/terima',
+                'terima'
+            )->name('terima');
+
+            \Illuminate\Support\Facades\Route::post(
+                '/{pembayaran}/tolak',
+                'tolak'
+            )->name('tolak');
+        });
+    });
+
+// Tempel SEKALI di routes/web.php, DI LUAR seluruh grup route lama.
+\Illuminate\Support\Facades\Route::prefix('admin/jenis-surat')->name('admin.jenis-surat.')
+    ->middleware([
+        \App\Http\Middleware\AuthenticateSurat::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-jenis-surat'
+    ])
+    ->controller(\App\Http\Controllers\JenisSuratController::class)
+    ->where(['jenisSurat' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{jenisSurat}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{jenisSurat}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{jenisSurat}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{jenisSurat}/nonaktifkan', 'nonaktifkan')->name('nonaktifkan');
+            \Illuminate\Support\Facades\Route::post('/{jenisSurat}/aktifkan', 'aktifkan')->name('aktifkan');
+        });
+    });
+
+// Tempel SEKALI di routes/web.php, DI LUAR grup route sebelumnya.
+\Illuminate\Support\Facades\Route::prefix('surat')->name('surat.')
+    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-surat'])
+    ->controller(\App\Http\Controllers\PermohonanSuratController::class)
+    ->where(['permohonanSurat' => '[0-9]+', 'bagian' => 'lampiran|hasil'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::post('/', 'store')->middleware('throttle:10,1')->name('store');
+        \Illuminate\Support\Facades\Route::get('/{permohonanSurat}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::post('/{permohonanSurat}/tindakan', 'tindakan')->middleware('throttle:10,1')->name('tindakan');
+        \Illuminate\Support\Facades\Route::get('/{permohonanSurat}/dokumen/{bagian}', 'tautan')->middleware('throttle:30,1')->name('tautan');
+        \Illuminate\Support\Facades\Route::get('/{permohonanSurat}/unduh/{bagian}', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');
+    });
+
+
+// Tempel SEKALI di routes/web.php, DI LUAR semua grup route lama.
+\Illuminate\Support\Facades\Route::prefix('kalender-akademik')->name('kalender.')
+    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-kalender'])
+    ->controller(\App\Http\Controllers\KalenderAkademikController::class)
+    ->where(['kalenderAkademik' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{kalenderAkademik}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{kalenderAkademik}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{kalenderAkademik}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{kalenderAkademik}/tindakan', 'tindakan')->name('tindakan');
+        });
+    });
+
+
+// Tambahkan sekali DI LUAR grup admin yang sudah ada.
+\Illuminate\Support\Facades\Route::prefix('pengumuman')->name('pengumuman.')
+    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-pengumuman'])
+    ->controller(\App\Http\Controllers\PengumumanController::class)
+    ->where(['pengumuman' => '[0-9]+'])->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::get('/create', 'create')->name('create');
+        \Illuminate\Support\Facades\Route::get('/{pengumuman}', 'show')->name('show');
+        \Illuminate\Support\Facades\Route::get('/{pengumuman}/edit', 'edit')->name('edit');
+        \Illuminate\Support\Facades\Route::middleware('throttle:30,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/', 'store')->name('store');
+            \Illuminate\Support\Facades\Route::patch('/{pengumuman}', 'update')->name('update');
+            \Illuminate\Support\Facades\Route::post('/{pengumuman}/tindakan', 'tindakan')->name('tindakan');
+        });
+    });
+
+// Tambahkan sekali DI LUAR semua grup route sebelumnya.
+\Illuminate\Support\Facades\Route::prefix('notifikasi')->name('notifikasi.')
+    ->middleware([\App\Http\Middleware\AuthenticateSurat::class . ':web', 'auth.session', 'cache.headers:no_store;private', 'can:akses-notifikasi'])
+    ->controller(\App\Http\Controllers\NotifikasiController::class)->where(['notifikasi' => '[0-9]+'])
+    ->group(function (): void {
+        \Illuminate\Support\Facades\Route::get('/', 'index')->name('index');
+        \Illuminate\Support\Facades\Route::middleware('throttle:60,1')->group(function (): void {
+            \Illuminate\Support\Facades\Route::post('/baca-halaman', 'bacaHalaman')->name('baca-halaman');
+            \Illuminate\Support\Facades\Route::post('/{notifikasi}/baca', 'baca')->name('baca');
+            \Illuminate\Support\Facades\Route::post('/{notifikasi}/buka', 'buka')->name('buka');
+        });
+    });
+
+
+// Dashboard utama mahasiswa.
+Route::get(
+    '/portal-mahasiswa',
+    [\App\Http\Controllers\PortalMahasiswaController::class, 'index']
+)
+    ->middleware([
+        'auth:web',
+        'auth.session',
+        'cache.headers:no_store;private',
+    ])
+    ->name('portal.mahasiswa.index');
+
+
+
+// Dashboard utama Admin Akademik.
+Route::get(
+    '/admin',
+    [\App\Http\Controllers\AdminDashboardController::class, 'index']
+)
+    ->middleware([
+        'auth:web',
+        'auth.session',
+        'cache.headers:no_store;private',
+    ])
+    ->name('admin.dashboard');
+
+
+// Dashboard utama Admin Keuangan.
+Route::get(
+    '/keuangan',
+    [\App\Http\Controllers\KeuanganDashboardController::class, 'index']
+)
+    ->middleware([
+        'auth:web',
+        'auth.session',
+        'cache.headers:no_store;private',
+    ])
+    ->name('keuangan.dashboard');

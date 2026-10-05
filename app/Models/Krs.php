@@ -91,7 +91,7 @@ class Krs extends Model
             $pengesah = $krs->disahkan_oleh;
             $pasanganSah = ($disahkan === null && $pengesah === null)
                 || ($disahkan !== null && $pengesah !== null && $diajukan !== null
-                    && $disahkan->greaterThanOrEqualTo($diajukan));
+                    && $disahkan->gte($diajukan));
 
             $metadataValid = $pasanganSah && match ($krs->status) {
                 self::DRAF => $diajukan === null && $disahkan === null,

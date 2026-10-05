@@ -37,7 +37,7 @@ class KalenderAkademik extends Model
         static::saving(function (self $k): void {
             if (
                 $k->getConnection()->transactionLevel() < 1 || ! isset(self::STATUS[$k->status], self::JENIS[$k->jenis])
-                || ! $k->mulai_at || ! $k->selesai_at || $k->selesai_at->lessThanOrEqualTo($k->mulai_at)
+                || ! $k->mulai_at || ! $k->selesai_at || $k->selesai_at->lteTo($k->mulai_at)
                 || mb_strlen(trim((string) $k->judul)) < 3 || mb_strlen((string) $k->judul) > 200
                 || mb_strlen((string) $k->keterangan) > 5000 || $k->revisi < 1 || $k->revisi > 4294967295
                 || ! Str::isUuid((string) $k->form_token) || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $k->hash_permohonan)

@@ -1,77 +1,185 @@
 @extends('layouts.pengumpulan')
+
 @section('title', 'Detail Jawaban')
+
 @section('content')
+    @php
+        $kegiatan = $pengumpulan->kegiatan;
+
+        $status = \App\Models\Pengumpulan::STATUS[
+            $pengumpulan->status
+        ] ?? $pengumpulan->status;
+    @endphp
+
     <div class="heading">
-        <h1>{{ $pengumpulan->kegiatan?->judul ?? 'Detail jawaban' }}</h1><a
-            href="{{ route('pengumpulan.index') }}">Kembali</a>
-    </div>
-    @if (session('info'))
-        <div class="notice" role="status">{{ session('info') }}</div>
-    @endif
-    @if (isset($errors) && $errors->any())
-        <div class="notice error" role="alert">
-            <ul>
-                @foreach ($errors->all() as $pesan)
-                    <li>{{ $pesan }}</li>
-                @endforeach
-            </ul>
+        <div>
+            <p>Jawaban mahasiswa</p>
+            <h1>{{ $kegiatan?->judul ?? 'Detail jawaban' }}</h1>
+
+            <p>
+                {{ $kegiatan?->kelasKuliah?->kode ?? 'Kelas' }}
+                —
+                {{ $kegiatan?->kelasKuliah?->nama_mk_snapshot
+                    ?? 'Mata kuliah' }}
+            </p>
         </div>
-    @endif
-    <article class="card">
-        <h2>Informasi jawaban</h2>
-        <dl>
-            <dt>Pemilik</dt>
-            <dd>{{ $pengumpulan->pemilik?->nama ?? '—' }}</dd>
-            <dt>Status</dt>
-            <dd>{{ ucfirst($pengumpulan->status) }}</dd>
-            <dt>Versi</dt>
-            <dd>{{ $pengumpulan->versi }}</dd>
-            <dt>Dikirim</dt>
-            <dd>{{ $pengumpulan->dikirim_at?->setTimezone($zona)->format('d-m-Y H:i:s') ?? 'Belum dikirim' }}</dd>
-        </dl>
-    </article>
-    @if ($bolehTulis)
-        <section class="card">
-            <h2>Jawaban</h2>
-            <form method="post" action="{{ route('pengumpulan.update', $pengumpulan) }}">@csrf @method('PATCH')
-                <label for="jawaban_teks">Isi jawaban</label>
-                <textarea id="jawaban_teks" name="jawaban_teks" rows="10" maxlength="10000">{{ old('jawaban_teks', $pengumpulan->jawaban_teks) }}</textarea>
-                <input type="hidden" name="versi" value="{{ $pengumpulan->versiForm() }}"><button type="submit">Simpan
-                    draf</button>
-            </form>
-            <form method="post" action="{{ route('pengumpulan.kirim', $pengumpulan) }}">@csrf
-                <input type="hidden" name="versi" value="{{ $pengumpulan->versiForm() }}"><label><input type="checkbox"
-                        name="konfirmasi" value="1" required> Saya memastikan jawaban ini siap dikirim.</label><button
-                    type="submit">Kirim jawaban final</button>
-            </form>
-        </section>
-    @else
-        <section class="card">
-            <h2>Isi jawaban</h2>
-            <div class="peng-isi">{{ $pengumpulan->jawaban_teks }}</div>
-        </section>
-    @endif
+
+        <a href="{{ route(
+            'pengumpulan.saya',
+            $kegiatan
+        ) }}">
+            Kembali
+        </a>
+    </div>
+
+    @include('pengumpulan._jadwal', [
+        'kegiatan' => $kegiatan,
+    ])
+
     <section class="card">
-        <h2>Lampiran</h2>
-        @forelse ($pengumpulan->lampiran as $lampiran)
-            <div class="attachment"><span>{{ $lampiran->nama_asli }}</span>
-                @if ($lampiran->aktif)
-                    <a href="{{ route('pengumpulan.tautan', [$pengumpulan, $lampiran]) }}">Unduh</a>
-                @endif
+        <h2>Status jawaban</h2>
+
+        <dl class="metadata">
+            <div>
+                <dt>Status</dt>
+                <dd>{{ $status }}</dd>
             </div>
-        @empty<p class="muted">Tidak ada lampiran.</p>
+
+            <div>
+                <dt>Dikirim</dt>
+                <dd>
+                    {{ $pengumpulan->dikirim_at
+                        ? $pengumpulan->dikirim_at
+                            ->setTimezone($zona)
+                            ->format('d-m-Y H:i')
+                        : '—' }}
+                </dd>
+            </div>
+
+            <div>
+                <dt>Terakhir diubah</dt>
+                <dd>
+                    {{ $pengumpulan->diubah_at
+                        ? $pengumpulan->diubah_at
+                            ->setTimezone($zona)
+                            ->format('d-m-Y H:i')
+                        : 'Belum pernah diubah' }}
+                </dd>
+            </div>
+        </dl>
+    </section>
+
+    <section class="card">
+        <h2>Pesan untuk dosen</h2>
+
+        @if (filled($pengumpulan->jawaban_teks))
+            <div class="peng-isi">
+                {{ $pengumpulan->jawaban_teks }}
+            </div>
+        @else
+            <p class="muted">
+                Tidak ada pesan tambahan.
+            </p>
+        @endif
+    </section>
+
+    <section class="card">
+        <h2>Berkas jawaban</h2>
+
+        @forelse ($pengumpulan->lampiran as $lampiran)
+            <div class="attachment">
+                <div>
+                    <strong>
+                        {{ $lampiran->nama_asli }}
+                    </strong>
+
+                    <small>
+                        {{ number_format(
+                            $lampiran->ukuran_byte / 1048576,
+                            2,
+                            ',',
+                            '.'
+                        ) }} MB
+                    </small>
+                </div>
+
+                <form
+                    method="post"
+                    action="{{ route(
+                        'pengumpulan.tautan',
+                        [
+                            $pengumpulan,
+                            $lampiran,
+                        ]
+                    ) }}"
+                >
+                    @csrf
+
+                    <button type="submit" class="secondary">
+                        Unduh
+                    </button>
+                </form>
+            </div>
+        @empty
+            <p class="muted">
+                Tidak ada berkas jawaban.
+            </p>
         @endforelse
     </section>
-    @if ($pemilik)
+
+    @if ($bolehTulis)
         <section class="card">
-            <h2>Audit jawaban</h2>
-            @forelse ($audit as $log)
-                <details>
-                    <summary>Revisi {{ $log->versi_entitas }} · {{ $log->aksi }}</summary>
-                    <p>{{ $log->alasan }}</p>
-            </details>@empty<p class="muted">Belum ada audit yang dapat ditampilkan.</p>
-            @endforelse
-            {{ $audit->links('pengumpulan._pagination') }}
+            <h2>Kelola jawaban</h2>
+
+            <p>
+                Jawaban masih dapat diubah atau dihapus karena
+                tenggat belum berakhir.
+            </p>
+
+            <div class="actions">
+                <a
+                    class="button"
+                    href="{{ route(
+                        'pengumpulan.edit',
+                        $pengumpulan
+                    ) }}"
+                >
+                    Edit jawaban
+                </a>
+
+                <form
+                    method="post"
+                    action="{{ route(
+                        'pengumpulan.destroy',
+                        $pengumpulan
+                    ) }}"
+                    onsubmit="return confirm('Hapus jawaban ini?')"
+                >
+                    @csrf
+                    @method('DELETE')
+
+                    <input
+                        type="hidden"
+                        name="versi_form"
+                        value="{{ $pengumpulan->versiForm() }}"
+                    >
+
+                    <button type="submit" class="secondary">
+                        Hapus jawaban
+                    </button>
+                </form>
+            </div>
+        </section>
+    @elseif (
+        $pemilik
+        && $pengumpulan->status
+            === \App\Models\Pengumpulan::TERKIRIM
+    )
+        <section class="card">
+            <p class="muted">
+                Tenggat telah berakhir. Jawaban hanya dapat dilihat
+                dan tidak dapat diubah lagi.
+            </p>
         </section>
     @endif
 @endsection

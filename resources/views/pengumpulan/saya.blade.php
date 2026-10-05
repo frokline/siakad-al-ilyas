@@ -1,58 +1,217 @@
 @extends('layouts.pengumpulan')
-@section('title', 'Jawaban Saya')
+
+@section('title', 'Pengumpulan Jawaban')
+
 @section('content')
+    @php
+        $format = strtoupper(
+            implode(', ', $kegiatan->ekstensi_diizinkan)
+        );
+
+        $aktif = $pengumpulan
+            && $pengumpulan->status
+                === \App\Models\Pengumpulan::TERKIRIM;
+
+        $dibatalkan = $pengumpulan
+            && $pengumpulan->status
+                === \App\Models\Pengumpulan::DIBATALKAN;
+    @endphp
+
     <div class="heading">
-        <h1>Jawaban saya</h1><a href="{{ route('pengumpulan.index') }}">Semua jawaban</a>
+        <div>
+            <p>Pembelajaran mahasiswa</p>
+            <h1>{{ $kegiatan->judul }}</h1>
+
+            <p>
+                {{ $kegiatan->kelasKuliah?->kode ?? 'Kelas' }}
+                —
+                {{ $kegiatan->kelasKuliah?->nama_mk_snapshot ?? 'Mata kuliah' }}
+            </p>
+        </div>
+
+        <a href="{{ route('kegiatan.show', $kegiatan) }}">
+            Lihat instruksi
+        </a>
     </div>
-    @include('pengumpulan._jadwal')
-    <section class="card">
-        <h2>Status pengumpulan</h2>
-        @forelse($berlaku as $p)
-            <p class="notice">Kiriman yang berlaku: <a href="{{ route('pengumpulan.show', $p) }}">versi
-                    {{ $p->versi }}</a>,
-                dikirim {{ $p->dikirim_at->setTimezone($zona)->format('d-m-Y H:i:s') }}.</p>
-        @empty<p class="notice error">Belum ada jawaban final yang terkumpul.</p>
-        @endforelse
-        <p>Draf baru tidak menggantikan kiriman sebelumnya. Versi baru dimulai kosong; Anda boleh memakai ID berkas milik
-            sendiri dari versi terdahulu.</p>
-        @if ($bolehTulis)
-            @if ($draf)
-                <a class="button" href="{{ route('pengumpulan.edit', $draf) }}">Lanjutkan draf versi {{ $draf->versi }}</a>
-            @else
-                <form method="post" action="{{ route('pengumpulan.store', $kegiatan) }}">
-                    @csrf<input type="hidden" name="token_draf" value="{{ old('token_draf', $token) }}">
-                    <input type="hidden" name="dasar_versi" value="{{ old('dasar_versi', $dasarVersi) }}">
-                    <button type="submit">Buat draf versi {{ $dasarVersi + 1 }}</button>
-                </form>
-            @endif
-        @else<p class="muted">Pembuatan, perubahan, dan pengiriman draf tidak tersedia saat ini. Periksa jadwal dan
-                status keikutsertaan Anda.</p>
-        @endif
-    </section>
-    <section class="card table-wrap">
-        <h2>Riwayat versi saya</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Versi</th>
-                    <th>Status</th>
-                    <th>Dikirim ({{ $zona }})</th>
-                    <th>Aksi</th>
-                </tr>
-            </thead>
-            <tbody>
-                @forelse($daftar as $p)
-                    <tr>
-                        <td>{{ $p->versi }}</td>
-                        <td>{{ \App\Models\Pengumpulan::STATUS[$p->status] }}</td>
-                        <td>{{ $p->dikirim_at?->setTimezone($zona)->format('d-m-Y H:i:s') ?? 'Belum dikirim' }}</td>
-                        <td><a href="{{ route('pengumpulan.show', $p) }}">Buka versi</a></td>
-                    </tr>
-                @empty<tr>
-                        <td colspan="4">Belum ada versi jawaban.</td>
-                    </tr>
-                @endforelse
-            </tbody>
-        </table>{{ $daftar->links('pengumpulan._pagination') }}
-    </section>
+
+    @include('pengumpulan._jadwal', [
+        'kegiatan' => $kegiatan,
+    ])
+
+    @if ($aktif)
+        <section class="card">
+            <h2>Jawaban sudah dikumpulkan</h2>
+
+            <p class="notice">
+                Jawaban dikumpulkan pada
+                {{ $pengumpulan->dikirim_at
+                    ->setTimezone($zona)
+                    ->format('d-m-Y H:i') }}.
+
+                @if ($pengumpulan->diubah_at)
+                    Terakhir diubah pada
+                    {{ $pengumpulan->diubah_at
+                        ->setTimezone($zona)
+                        ->format('d-m-Y H:i') }}.
+                @endif
+            </p>
+
+            <div class="actions">
+                <a
+                    class="button"
+                    href="{{ route(
+                        'pengumpulan.show',
+                        $pengumpulan
+                    ) }}"
+                >
+                    Lihat jawaban
+                </a>
+
+                @if ($bolehTulis)
+                    <a
+                        class="button secondary"
+                        href="{{ route(
+                            'pengumpulan.edit',
+                            $pengumpulan
+                        ) }}"
+                    >
+                        Edit jawaban
+                    </a>
+
+                    <form
+                        method="post"
+                        action="{{ route(
+                            'pengumpulan.destroy',
+                            $pengumpulan
+                        ) }}"
+                        onsubmit="return confirm('Hapus jawaban ini? Tindakan akan dicatat oleh sistem.')"
+                    >
+                        @csrf
+                        @method('DELETE')
+
+                        <input
+                            type="hidden"
+                            name="versi_form"
+                            value="{{ $pengumpulan->versiForm() }}"
+                        >
+
+                        <button type="submit" class="secondary">
+                            Hapus jawaban
+                        </button>
+                    </form>
+                @endif
+            </div>
+
+            @unless ($bolehTulis)
+                <p class="muted">
+                    Jawaban tidak dapat diubah karena waktu pengumpulan
+                    telah berakhir atau status akademik tidak aktif.
+                </p>
+            @endunless
+        </section>
+    @elseif ($dibatalkan)
+        <section class="card">
+            <h2>Jawaban telah dihapus</h2>
+
+            <p class="notice error">
+                Jawaban ini dibatalkan pada
+                {{ $pengumpulan->dibatalkan_at
+                    ? $pengumpulan->dibatalkan_at
+                        ->setTimezone($zona)
+                        ->format('d-m-Y H:i')
+                    : 'waktu yang tidak tersedia' }}.
+            </p>
+
+            <a
+                href="{{ route(
+                    'pengumpulan.show',
+                    $pengumpulan
+                ) }}"
+            >
+                Lihat riwayat jawaban
+            </a>
+        </section>
+    @elseif ($bolehTulis)
+        <form
+            method="post"
+            action="{{ route(
+                'pengumpulan.store',
+                $kegiatan
+            ) }}"
+            enctype="multipart/form-data"
+            class="card form-card"
+        >
+            @csrf
+
+            <h2>Kirim jawaban</h2>
+
+            <div class="field">
+                <label for="jawaban_teks">
+                    Pesan untuk dosen
+                </label>
+
+                <textarea
+                    id="jawaban_teks"
+                    name="jawaban_teks"
+                    rows="5"
+                    maxlength="{{ config(
+                        'pengumpulan.maks_karakter_jawaban',
+                        10000
+                    ) }}"
+                    placeholder="Opsional. Contoh: Izin mengumpulkan tugas."
+                >{{ old('jawaban_teks') }}</textarea>
+
+                <small>
+                    Pesan boleh dikosongkan jika Anda mengunggah berkas.
+                </small>
+            </div>
+
+            <div class="field">
+                <label for="berkas_baru">
+                    Pilih berkas jawaban
+                </label>
+
+                <input
+                    id="berkas_baru"
+                    name="berkas_baru[]"
+                    type="file"
+                    multiple
+                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+                >
+
+                <small>
+                    Format: {{ $format }}.
+                    Maksimal {{ $kegiatan->maks_berkas }} berkas,
+                    masing-masing maksimal
+                    {{ (int) (
+                        $kegiatan->maks_ukuran_byte / 1048576
+                    ) }} MB.
+                </small>
+            </div>
+
+            <div class="actions">
+                <button type="submit">
+                    Kirim jawaban
+                </button>
+
+                <a href="{{ route('kegiatan.show', $kegiatan) }}">
+                    Batal
+                </a>
+            </div>
+
+            <p class="notice">
+                Setelah dikirim, jawaban masih dapat diedit atau
+                dihapus selama tenggat belum berakhir.
+            </p>
+        </form>
+    @else
+        <section class="card">
+            <h2>Pengumpulan tidak tersedia</h2>
+
+            <p class="notice error">
+                Waktu pengumpulan belum dimulai, telah berakhir,
+                atau status keikutsertaan kelas Anda tidak aktif.
+            </p>
+        </section>
+    @endif
 @endsection

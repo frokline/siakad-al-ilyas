@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Actions\KelolaPembayaran;
+use App\Actions\ProsesVerifikasiPembayaran;
+use App\Http\Requests\VerifikasiPembayaranRequest;
 use App\Http\Requests\PembayaranRequest;
 use App\Http\Requests\PembayaranBatalRequest;
 use App\Models\Berkas;
@@ -77,18 +79,102 @@ class PembayaranController extends Controller
         $p = $aksi->ajukan($r->user()->id, $tagihan, $r->validated());
         return redirect()->route('pembayaran.show', $p)->with('info', 'Pengajuan tercatat. Unggah bukti tidak otomatis melunasi tagihan; periksa status pengajuan.');
     }
-    public function show(Request $r, Pembayaran $pembayaran): View
-    {
+    public function show(
+        Request $request,
+        Pembayaran $pembayaran
+    ): View {
         Gate::authorize('view', $pembayaran);
-        $r->validate(['page' => ['nullable', 'integer', 'between:1,100000']]);
-        $pembayaran->load('pengunggah');
-        $audit = Gate::allows('audit', $pembayaran) ? $pembayaran->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(10) : null;
-        return view('pembayaran.show', compact('pembayaran', 'audit'));
+
+        $request->validate([
+            'page' => [
+                'nullable',
+                'integer',
+                'between:1,100000',
+            ],
+        ]);
+
+        $pembayaran->load([
+            'pengunggah',
+            'tagihan',
+        ]);
+
+        $bolehMelihatAudit = Gate::allows(
+            'audit',
+            $pembayaran
+        );
+
+        $bolehVerifikasi = Gate::allows(
+            'verify',
+            $pembayaran
+        );
+
+        $audit = $bolehMelihatAudit
+            ? $pembayaran->audits()
+            ->with('pelaku')
+            ->orderByDesc('versi_entitas')
+            ->paginate(10)
+            : null;
+
+        $riwayatVerifikasi = $bolehMelihatAudit
+            ? $pembayaran->verifikasi()
+            ->with('petugas')
+            ->orderByDesc('waktu')
+            ->get()
+            : collect();
+
+        return view('pembayaran.show', [
+            'pembayaran' => $pembayaran,
+            'audit' => $audit,
+            'riwayatVerifikasi' => $riwayatVerifikasi,
+            'bolehVerifikasi' => $bolehVerifikasi,
+        ]);
     }
     public function batalkan(PembayaranBatalRequest $r, Pembayaran $pembayaran, KelolaPembayaran $aksi): RedirectResponse
     {
         $p = $aksi->batalkan($r->user()->id, $pembayaran, $r->validated());
         return redirect()->route('pembayaran.show', $p)->with('info', 'Pengajuan dibatalkan. Bukti dan riwayat tetap disimpan; dana bank tidak dikembalikan oleh tindakan ini.');
+    }
+
+    public function terima(
+        VerifikasiPembayaranRequest $request,
+        Pembayaran $pembayaran,
+        ProsesVerifikasiPembayaran $aksi
+    ): RedirectResponse {
+        Gate::authorize('verify', $pembayaran);
+
+        $hasil = $aksi->terima(
+            (int) $request->user()->id,
+            $pembayaran,
+            $request->validated()
+        );
+
+        return redirect()
+            ->route('pembayaran.show', $hasil)
+            ->with(
+                'info',
+                'Pembayaran berhasil diterima dan riwayat verifikasi telah dicatat.'
+            );
+    }
+
+    public function tolak(
+        VerifikasiPembayaranRequest $request,
+        Pembayaran $pembayaran,
+        ProsesVerifikasiPembayaran $aksi
+    ): RedirectResponse {
+        Gate::authorize('verify', $pembayaran);
+
+        $hasil = $aksi->tolak(
+            (int) $request->user()->id,
+            $pembayaran,
+            $request->validated()
+        );
+
+        return redirect()
+            ->route('pembayaran.show', $hasil)
+            ->with(
+                'info',
+                'Pembayaran berhasil ditolak. Mahasiswa dapat mengajukan bukti baru.'
+            );
     }
     public function tautan(Request $r, Pembayaran $pembayaran): RedirectResponse
     {

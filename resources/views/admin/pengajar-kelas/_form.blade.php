@@ -22,70 +22,85 @@
 @endif
 
 @if ($formLama)
-    <div class="alert alert-error" role="alert">
-        Kelas atau tim berubah sejak formulir dibuka.
-        <a
-            href="{{ $mengubah ? route('admin.pengajar-kelas.edit', $penugasan) : route('admin.pengajar-kelas.create', ['kelas_id' => $kelas->id]) }}">Muat
-            formulir terbaru</a>
-        dan periksa kembali tim sebelum menyimpan.
+    <div class="mb-6 rounded-lg bg-rose-50 border border-rose-200 p-4 text-sm text-rose-700 flex items-center justify-between"
+        role="alert">
+        <span>Kelas atau tim berubah sejak formulir dibuka.</span>
+        <a href="{{ $mengubah ? route('admin.pengajar-kelas.edit', $penugasan) : route('admin.pengajar-kelas.create', ['kelas_id' => $kelas->id]) }}"
+            class="font-semibold underline hover:text-rose-900">Muat formulir terbaru</a>
+        <span>dan periksa kembali tim sebelum menyimpan.</span>
     </div>
 @endif
 
-<fieldset class="pengajar-fieldset" @disabled(!$bolehSimpan || $formLama)>
-    <legend class="pengajar-sr-only">Data penugasan dosen</legend>
+<fieldset @disabled(!$bolehSimpan || $formLama) class="space-y-6">
+    <legend class="sr-only">Data penugasan dosen</legend>
     @if ($mengubah)
-        <p><strong>Dosen:</strong> {{ $penugasan->dosen->kode_dosen }} — {{ $penugasan->dosen->user->nama }}</p>
-        <p class="help">Identitas dosen dan kelas pada penugasan ini tetap.</p>
+        <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm">
+            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider block">Dosen</span>
+            <strong class="font-bold text-slate-800 block mt-1"><span
+                    class="font-mono">{{ $penugasan->dosen->kode_dosen }}</span> —
+                {{ $penugasan->dosen->user->nama }}</strong>
+            <p class="text-xs text-slate-500 mt-1">Identitas dosen dan kelas pada penugasan ini tetap.</p>
+        </div>
     @else
-        <div class="field">
-            <label for="dosen_id">Dosen</label>
-            <select name="dosen_id" id="dosen_id" required aria-describedby="dosen-help"
-                aria-invalid="{{ $errors->has('dosen_id') ? 'true' : 'false' }}">
+        <div>
+            <label for="dosen_id" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Dosen
+                <span class="text-rose-500">*</span></label>
+            <select name="dosen_id" id="dosen_id" required
+                class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white @error('dosen_id') border-rose-500 bg-rose-50/50 @enderror"
+                aria-describedby="dosen-help" aria-invalid="{{ $errors->has('dosen_id') ? 'true' : 'false' }}">
                 <option value="">Pilih dosen</option>
                 @foreach ($dosenPilihan as $dosen)
                     <option value="{{ $dosen->id }}" @selected($dosenLama === (string) $dosen->id)>
-                        {{ $dosen->kode_dosen }} — {{ $dosen->user->nama }}{{ $dosen->gelar ? ', ' . $dosen->gelar : '' }}
+                        {{ $dosen->kode_dosen }} —
+                        {{ $dosen->user->nama }}{{ $dosen->gelar ? ', ' . $dosen->gelar : '' }}
                     </option>
                 @endforeach
             </select>
-            <p class="help" id="dosen-help">Dosen aktif dengan akun dan role yang sesuai, serta belum memiliki
-                penugasan pada kelas ini.</p>
+            <p class="mt-1 text-xs text-slate-500" id="dosen-help">Dosen aktif dengan akun dan role yang sesuai, serta
+                belum memiliki penugasan pada kelas ini.</p>
             @error('dosen_id')
-                <p class="field-error">{{ $message }}</p>
+                <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
             @enderror
         </div>
     @endif
 
-    <div class="form-grid">
-        <div class="field">
-            <label for="peran">Peran dalam kelas</label>
-            <select name="peran" id="peran" required aria-describedby="peran-help">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+            <label for="peran" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Peran
+                dalam Kelas <span class="text-rose-500">*</span></label>
+            <select name="peran" id="peran" required
+                class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white"
+                aria-describedby="peran-help">
                 @foreach (\App\Models\PengajarKelas::PERAN as $kode => $label)
                     <option value="{{ $kode }}" @selected($peranLama === $kode)>{{ $label }}</option>
                 @endforeach
             </select>
             @error('peran')
-                <p class="field-error">{{ $message }}</p>
+                <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
             @enderror
         </div>
 
         @if ($mengubah)
-            <div class="field">
-                <label for="aktif">Status penugasan</label>
-                <select name="aktif" id="aktif" required>
+            <div>
+                <label for="aktif"
+                    class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Status Penugasan <span
+                        class="text-rose-500">*</span></label>
+                <select name="aktif" id="aktif" required
+                    class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white">
                     <option value="1" @selected($aktifLama)>Aktif</option>
                     <option value="0" @selected(!$aktifLama)>Nonaktif</option>
                 </select>
                 @error('aktif')
-                    <p class="field-error">{{ $message }}</p>
+                    <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
                 @enderror
             </div>
         @endif
     </div>
 
-    <div class="pengajar-note" id="peran-help">
+    <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 text-xs text-slate-600 space-y-1.5" id="peran-help">
         @if ($koordinatorForm)
-            <p>Koordinator saat ini: <strong>{{ $koordinatorForm->dosen->user->nama }}</strong>.</p>
+            <p>Koordinator saat ini: <strong class="text-slate-800">{{ $koordinatorForm->dosen->user->nama }}</strong>.
+            </p>
         @else
             <p>Kelas ini belum memiliki koordinator aktif.</p>
         @endif
@@ -99,23 +114,34 @@
         @endif
     </div>
 
-    <div class="field">
-        <label for="alasan">Alasan penugasan/perubahan</label>
+    <div>
+        <label for="alasan" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Alasan
+            Penugasan/Perubahan <span class="text-rose-500">*</span></label>
         <textarea id="alasan" name="alasan" rows="4" minlength="10" maxlength="2000" required
+            class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white @error('alasan') border-rose-500 bg-rose-50/50 @enderror"
             aria-describedby="alasan-help" aria-invalid="{{ $errors->has('alasan') ? 'true' : 'false' }}">{{ $alasanLama }}</textarea>
-        <p class="help" id="alasan-help">Wajib 10–2.000 karakter. Alasan disimpan pada riwayat perubahan.</p>
+        <p class="mt-1 text-xs text-slate-500" id="alasan-help">Wajib 10–2.000 karakter. Alasan disimpan pada riwayat
+            perubahan.</p>
         @error('alasan')
-            <p class="field-error">{{ $message }}</p>
+            <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
         @enderror
     </div>
 
-    <label class="pengajar-konfirmasi" for="konfirmasi-penugasan">
-        <input type="checkbox" id="konfirmasi-penugasan" name="konfirmasi" value="1" required>
-        <span>Saya telah memeriksa dosen, kelas, peran, dan dampak perubahan pada koordinator saat ini.</span>
-    </label>
-    @error('konfirmasi')
-        <p class="field-error">{{ $message }}</p>
-    @enderror
+    <div>
+        <label class="flex items-center gap-3 cursor-pointer" for="konfirmasi-penugasan">
+            <input class="h-4 w-4 rounded border-slate-300 text-siakad-dark focus:ring-siakad-dark" type="checkbox"
+                id="konfirmasi-penugasan" name="konfirmasi" value="1" required>
+            <span class="text-sm font-medium text-slate-700">Saya telah memeriksa dosen, kelas, peran, dan dampak
+                perubahan pada koordinator saat ini.</span>
+        </label>
+        @error('konfirmasi')
+            <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
+        @enderror
+    </div>
 
-    <button class="button" type="submit">{{ $mengubah ? 'Simpan perubahan penugasan' : 'Tambahkan dosen' }}</button>
+    <div class="pt-5 border-t border-slate-200 flex justify-end">
+        <button
+            class="rounded-lg bg-siakad-dark px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 transition-colors focus:outline-none focus:ring-2 focus:ring-siakad-dark focus:ring-offset-2"
+            type="submit">{{ $mengubah ? 'Simpan perubahan penugasan' : 'Tambahkan dosen' }}</button>
+    </div>
 </fieldset>

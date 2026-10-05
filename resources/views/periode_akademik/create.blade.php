@@ -1,33 +1,40 @@
-@extends('layouts.siakad')
+@extends('layouts.admin')
 
 @section('title', 'Tambah Periode Akademik')
 
-@section('breadcrumb')
-    <a href="{{ route('admin.periode-akademik.index') }}">Periode Akademik</a>
-    <span> / Tambah</span>
-@endsection
-
 @section('content')
-    <div class="page-heading">
+    <!-- PAGE HEADER -->
+    <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-            <h1>Tambah Periode Akademik</h1>
-            <p class="subtitle">Atur semester dan jadwal pengisian KRS.</p>
+            <h1 class="text-xl font-bold text-slate-800">Tambah Periode Akademik</h1>
+            <p class="text-sm text-slate-500 mt-1">Buat periode akademik baru untuk pengelolaan perkuliahan.</p>
         </div>
+        <a class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm self-start"
+            href="{{ route('admin.periode-akademik.index') }}">
+            &larr; Kembali ke Daftar
+        </a>
     </div>
 
-    <section class="card form-card panel-body">
-        <form method="POST" action="{{ route('admin.periode-akademik.store') }}">
-            @csrf
+    <!-- FORM CARD -->
+    <div class="rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden w-full">
+        <div class="border-b border-slate-200 bg-slate-50/50 px-6 py-4">
+            <h2 class="text-sm font-bold text-slate-800">Formulir Periode Akademik</h2>
+        </div>
+        <div class="p-6 sm:p-8">
+            <form method="POST" action="{{ route('admin.periode-akademik.store') }}">
+                @include('periode_akademik._form')
 
-            @include('periode_akademik._form')
-
-            <div class="actions">
-                <button type="submit" class="button">Simpan Periode</button>
-
-                <a href="{{ route('admin.periode-akademik.index') }}" class="button button-secondary">
-                    Batal
-                </a>
-            </div>
-        </form>
-    </section>
+                <div class="mt-8 flex items-center justify-end gap-3 pt-6 border-t border-slate-200">
+                    <a class="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+                        href="{{ route('admin.periode-akademik.index') }}">
+                        Batal
+                    </a>
+                    <button type="submit"
+                        class="rounded-lg bg-siakad-dark px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 transition-colors focus:outline-none focus:ring-2 focus:ring-siakad-dark focus:ring-offset-2">
+                        Simpan Periode
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 @endsection

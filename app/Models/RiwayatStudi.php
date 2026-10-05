@@ -2,10 +2,12 @@
 
 namespace App\Models;
 
+
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Validation\ValidationException;
 use \App\Models\Concerns\MenjagaPeriodeRegistrasi;
 
@@ -162,6 +164,14 @@ class RiwayatStudi extends Model
     {
         return $this->status === self::AKTIF;
     }
+
+public function registrasiSemester(): HasMany
+{
+    return $this->hasMany(
+        RegistrasiSemester::class,
+        'riwayat_studi_id'
+    );
+}
 
     public function krs(): \Illuminate\Database\Eloquent\Relations\HasManyThrough
     {

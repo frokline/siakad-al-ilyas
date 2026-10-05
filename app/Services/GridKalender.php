@@ -13,7 +13,7 @@ final class GridKalender
         $awal = $bulan->startOfMonth()->startOfWeek(1);
         $akhir = $bulan->endOfMonth()->endOfWeek(0)->startOfDay();
         $hari = [];
-        for ($d = $awal; $d->lessThanOrEqualTo($akhir); $d = $d->addDay()) {
+        for ($d = $awal; $d->lteTo($akhir); $d = $d->addDay()) {
             $besok = $d->addDay();
             $items = $agenda->filter(fn(KalenderAkademik $k) => $k->mulai_at->lessThan($besok) && $k->selesai_at->greaterThan($d))->values();
             $hari[] = ['tanggal' => $d, 'bulan_ini' => $d->format('Y-m') === $bulan->format('Y-m'), 'agenda' => $items];

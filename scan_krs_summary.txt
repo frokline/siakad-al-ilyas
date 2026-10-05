@@ -1,0 +1,803 @@
+﻿=== RINGKASAN STRUKTUR & KODE KRS PROYEK SIAKAD ===
+
+1. RUTING KRS DI routes/web.php:
+use App\Http\Controllers\KrsController;
+use App\Http\Controllers\PortalKrsController;
+// Portal KRS mahasiswa.
+Route::controller(PortalKrsController::class)
+    ->prefix('krs-saya')
+    ->name('portal.krs.')
+        'krs' => '[0-9]+',
+        Route::get('/{krs}/cetak', 'cetak')
+        Route::get('/{krs}', 'show')
+        // KRS (Diperbaiki)
+        Route::controller(KrsController::class)->prefix('krs')->name('krs.')
+            ->middleware('can:kelola-krs')->where(['krs' => '[0-9]+'])->group(function (): void {
+                Route::get('/{krs}/cetak', 'cetak')->name('cetak');
+                Route::get('/{krs}/edit', 'edit')->name('edit');
+                Route::get('/{krs}', 'show')->name('show');
+                    Route::patch('/{krs}', 'update')->name('update');
+                    Route::post('/{krs}/ajukan', 'ajukan')->name('ajukan');
+                    Route::post('/{krs}/kembalikan', 'kembalikan')->name('kembalikan');
+                    Route::post('/{krs}/sahkan', 'sahkan')->name('sahkan');
+                    Route::post('/{krs}/revisi', 'revisi')->name('revisi');
+                    Route::post('/{krs}/pulihkan', 'pulihkan')->name('pulihkan');
+                    Route::post('/{krs}/batalkan', 'batalkan')->name('batalkan');
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\app\Http\Controllers\KrsController.php ===
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaKrs;
+use App\Http\Requests\KrsRequest;
+use App\Models\KelasKuliah;
+use App\Models\Krs;
+use App\Models\Kurikulum;
+use App\Models\PaketSemester;
+use App\Models\PeriodeAkademik;
+use App\Models\ProgramStudi;
+use App\Models\RegistrasiSemester;
+use App\Models\RiwayatStudi;
+use App\Models\Role;
+use App\Models\Rombel;
+use Illuminate\Contracts\View\View;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+
+class KrsController extends Controller
+{
+    public function index(Request $request): View
+    {
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'periode_id' => ['nullable', 'integer', 'min:1', Rule::exists('periode_akademik', 'id')],
+            'program_studi_id' => ['nullable', 'integer', 'min:1', Rule::exists('program_studi', 'id')],
+            'status' => ['nullable', Rule::in(array_keys(Krs::STATUS))],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000'],
+        ]);
+
+        $query = Krs::query()->with($this->relations());
+        $q = trim((string) ($filter['q'] ?? ''));
+        if ($q !== '') {
+            $this->cariMahasiswa($query, 'registrasiSemester.riwayatStudi.mahasiswa', $q);
+        }
+        if (! empty($filter['periode_id'])) {
+            $query->whereHas('registrasiSemester', fn(Builder $reg) => $reg->where('periode_akademik_id', $filter['periode_id']));
+        }
+        if (! empty($filter['program_studi_id'])) {
+            $query->whereHas(
+                'registrasiSemester.riwayatStudi.kurikulum',
+                fn(Builder $kurikulum) => $kurikulum->where('program_studi_id', $filter['program_studi_id'])
+            );
+        }
+        if (! empty($filter['status'])) {
+            $query->where('status', $filter['status']);
+        }
+
+        return view('admin.krs.index', [
+            'daftarKrs' => $query->orderByDesc('id')->paginate(15)->withQueryString(),
+            'filter' => $filter,
+            'daftarPeriode' => PeriodeAkademik::query()->orderByDesc('mulai')->get(),
+            'daftarProdi' => ProgramStudi::query()->orderBy('nama')->get(),
+        ]);
+    }
+
+    public function create(Request $request): View
+    {
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'periode_id' => ['nullable', 'integer', 'min:1', Rule::exists('periode_akademik', 'id')],
+            'registrasi_id' => ['nullable', 'integer', 'min:1', Rule::exists('registrasi_semester', 'id')],
+            'calon_page' => ['nullable', 'integer', 'min:1', 'max:100000'],
+        ]);
+
+        $calon = RegistrasiSemester::query()->with($this->relasiRegistrasi())
+            ->where('status', RegistrasiSemester::AKTIF)
+            ->whereHas('riwayatStudi', fn(Builder $riwayat) => $riwayat->where('status', RiwayatStudi::AKTIF))
+            ->whereHas('periodeAkademik', fn(Builder $periode) => $periode->where('status', 'aktif'))
+            ->whereDoesntHave('krs');
+
+        $q = trim((string) ($filter['q'] ?? ''));
+        if ($q !== '') {
+            $this->cariMahasiswa($calon, 'riwayatStudi.mahasiswa', $q);
+        }
+        if (! empty($filter['periode_id'])) {
+            $calon->where('periode_akademik_id', $filter['periode_id']);
+        }
+
+        $registrasi = null;
+        $barisPaket = collect();
+        $kendala = [];
+        if (! empty($filter['registrasi_id'])) {
+            $registrasi = RegistrasiSemester::query()->with(array_merge($this->relasiRegistrasi(), [
+                'krs',
+                'rombel.kelasKuliah',
+                'rombel.paketSemester.details.kurikulumMataKuliah.mataKuliah',
+            ]))->findOrFail($filter['registrasi_id']);
+
+            $paket = $registrasi->rombel->paketSemester;
+            $kelasPerDetail = $registrasi->rombel->kelasKuliah->keyBy('detail_paket_id');
+            $barisPaket = $paket->details->sortBy('id')->map(function ($detail) use ($kelasPerDetail): array {
+                $kelas = $kelasPerDetail->get($detail->id);
+                return [
+                    'nama' => $kelas?->nama_mk_snapshot ?? $detail->kurikulumMataKuliah->mataKuliah->nama,
+                    'sks' => (string) ($kelas?->sks_snapshot ?? $detail->kurikulumMataKuliah->sks),
+                    'kelas' => $kelas,
+                ];
+            })->values();
+
+            if ($registrasi->krs !== null) {
+                $kendala[] = 'KRS registrasi ini sudah ada. Gunakan tombol Buka KRS yang tersedia.';
+            }
+            if ($registrasi->status !== RegistrasiSemester::AKTIF || $registrasi->penempatan_dikunci_at === null) {
+                $kendala[] = 'Aktifkan registrasi semester terlebih dahulu.';
+            }
+            if ($registrasi->riwayatStudi->status !== RiwayatStudi::AKTIF) {
+                $kendala[] = 'Riwayat studi sudah ditutup.';
+            }
+            if (! $registrasi->periodeAkademik->isKrsOpen()) {
+                $kendala[] = 'Periode atau jendela pengisian KRS belum aktif/sudah ditutup.';
+            }
+            if (! $registrasi->riwayatStudi->mahasiswa->user->hasRole(Role::MAHASISWA)) {
+                $kendala[] = 'Akun mahasiswa harus aktif dan memiliki role mahasiswa.';
+            }
+            if (
+                $registrasi->riwayatStudi->kurikulum->status !== Kurikulum::AKTIF
+                || ! $registrasi->riwayatStudi->kurikulum->programStudi->aktif
+                || ! in_array($paket->status, [PaketSemester::DITERBITKAN, PaketSemester::ARSIP], true)
+            ) {
+                $kendala[] = 'Periksa status kurikulum, program studi, dan paket semester.';
+            }
+            if (
+                $barisPaket->isEmpty() || $barisPaket->count() !== $kelasPerDetail->count()
+                || $barisPaket->contains(fn(array $baris): bool => $baris['kelas'] === null
+                    || ! in_array($baris['kelas']->status, [KelasKuliah::PERSIAPAN, KelasKuliah::AKTIF], true))
+            ) {
+                $kendala[] = 'Lengkapi seluruh kelas paket; kelas harus dalam persiapan atau aktif.';
+            }
+        }
+
+        return view('admin.krs.create', [
+            'calonRegistrasi' => $calon->orderByDesc('id')->paginate(10, ['*'], 'calon_page')->withQueryString(),
+            'registrasi' => $registrasi,
+            'barisPaket' => $barisPaket,
+            'kendala' => $kendala,
+            'filter' => $filter,
+            'daftarPeriode' => PeriodeAkademik::query()->where('status', 'aktif')->orderByDesc('mulai')->get(),
+        ]);
+    }
+
+    public function store(KrsRequest $request, KelolaKrs $action): RedirectResponse
+    {
+        $krs = $action->execute((int) $request->user()->id, 'buat', $request->validated());
+        return to_route('admin.krs.show', $krs)->with('success', 'Draf KRS dan seluruh detail paket berhasil dibuat.');
+    }
+
+    public function show(Krs $krs): View
+    {
+        $krs->load($this->relations());
+        $registrasi = $krs->registrasiSemester;
+
+        return view('admin.krs.show', [
+            'krs' => $krs,
+            'registrasi' => $registrasi,
+            'versiForm' => $krs->versiForm(),
+            'operasi' => $krs->operasiTersedia(),
+            'periodeTerbuka' => $registrasi->riwayatStudi->status === RiwayatStudi::AKTIF
+                && in_array($registrasi->periodeAkademik->status, Rombel::STATUS_PERIODE_TERBUKA, true),
+            'jendelaTerbuka' => $registrasi->periodeAkademik->isKrsOpen(),
+            'audits' => $krs->audits()->with('pelaku')
+                ->where('versi_entitas', '<=', $krs->versi)
+                ->orderByDesc('versi_entitas')->paginate(10, ['*'], 'audit_page')->withQueryString(),
+        ]);
+    }
+
+    public function edit(Krs $krs): View
+    {
+        $krs->load($this->relations());
+        abort_unless($krs->status === Krs::DRAF, 409, 'Catatan hanya dapat diubah pada KRS draf.');
+
+        return view('admin.krs.edit', [
+            'krs' => $krs,
+            'registrasi' => $krs->registrasiSemester,
+            'versiForm' => $krs->versiForm(),
+        ]);
+    }
+
+    public function update(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        $krs = $action->execute((int) $request->user()->id, 'ubah', $request->validated(), $krs);
+        return to_route('admin.krs.show', $krs)->with('success', 'Catatan draf KRS berhasil disimpan.');
+    }
+
+    public function ajukan(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        return $this->jalankan($request, $krs, $action, 'ajukan', 'KRS berhasil diajukan. Keikutsertaan kelas menunggu pengesahan.');
+    }
+
+    public function kembalikan(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        return $this->jalankan($request, $krs, $action, 'kembalikan', 'Pengajuan dikembalikan ke draf.');
+    }
+
+    public function sahkan(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        return $this->jalankan($request, $krs, $action, 'sahkan', 'KRS disahkan. Seluruh mata kuliah paket menjadi keikutsertaan yang sah.');
+    }
+
+    public function revisi(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        return $this->jalankan($request, $krs, $action, 'revisi', 'Revisi dibuka. Keikutsertaan kelas menunggu pengesahan ulang.');
+    }
+
+    public function pulihkan(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        return $this->jalankan($request, $krs, $action, 'pulihkan', 'KRS dipulihkan ke draf menggunakan detail yang sama.');
+    }
+
+    public function batalkan(KrsRequest $request, Krs $krs, KelolaKrs $action): RedirectResponse
+    {
+        return $this->jalankan($request, $krs, $action, 'batalkan', 'KRS dan keikutsertaan kelas dibatalkan. Riwayat tetap tersimpan.');
+    }
+
+    public function cetak(Request $request, Krs $krs, KelolaKrs $action): View
+    {
+        $krs = $action->untukCetak((int) $request->user()->id, $krs);
+        return view('admin.krs.cetak', [
+            'krs' => $krs,
+            'registrasi' => $krs->registrasiSemester,
+            'dicetakPada' => now('UTC'),
+        ]);
+    }
+
+    private function jalankan(KrsRequest $request, Krs $krs, KelolaKrs $action, string $operasi, string $pesan): RedirectResponse
+    {
+        $krs = $action->execute((int) $request->user()->id, $operasi, $request->validated(), $krs);
+        return to_route('admin.krs.show', $krs)->with('success', $pesan);
+    }
+
+    private function cariMahasiswa(Builder $query, string $relasi, string $q): void
+    {
+        // Parameter binding dipakai oleh Eloquent; tidak merangkai SQL dari input.
+        $query->whereHas($relasi, function (Builder $mahasiswa) use ($q): void {
+            $mahasiswa->where(function (Builder $identitas) use ($q): void {
+                $identitas->where('nim', 'like', '%' . $q . '%')
+                    ->orWhereHas('user', fn(Builder $user) => $user->where('nama', 'like', '%' . $q . '%'));
+            });
+        });
+    }
+
+    private function relasiRegistrasi(): array
+    {
+        return [
+            'riwayatStudi.mahasiswa.user',
+            'riwayatStudi.kurikulum.programStudi',
+            'periodeAkademik',
+            'rombel.paketSemester',
+        ];
+    }
+
+    private function relations(): array
+    {
+        return array_merge(
+            array_map(fn(string $relasi): string => 'registrasiSemester.' . $relasi, $this->relasiRegistrasi()),
+            ['details.kelasKuliah', 'pengesah']
+        );
+    }
+}
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\app\Http\Controllers\PortalKrsController.php ===
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Krs;
+use App\Models\User;
+use App\Services\AksesKrsMahasiswa;
+use Illuminate\Contracts\View\View;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+
+class PortalKrsController extends Controller
+{
+    public function index(
+        Request $request,
+        AksesKrsMahasiswa $akses
+    ): View {
+        /** @var User $user */
+        $user = $request->user();
+
+        abort_unless(
+            $akses->masuk($user),
+            403,
+            'Portal KRS hanya tersedia untuk mahasiswa aktif.'
+        );
+
+        $filter = $request->validate([
+            'status' => [
+                'nullable',
+                Rule::in(array_keys(Krs::STATUS)),
+            ],
+            'periode_id' => [
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+            'page' => [
+                'nullable',
+                'integer',
+                'between:1,100000',
+            ],
+        ]);
+
+        $query = $akses->batasi(
+            Krs::query()->with($this->relasi()),
+            $user
+        );
+
+        if (! empty($filter['status'])) {
+            $query->where(
+                'status',
+                $filter['status']
+            );
+        }
+
+        if (! empty($filter['periode_id'])) {
+            $query->whereHas(
+                'registrasiSemester',
+                fn(Builder $registrasi): Builder => $registrasi
+                    ->where(
+                        'periode_akademik_id',
+                        $filter['periode_id']
+                    )
+            );
+        }
+
+        $daftarKrs = $query
+            ->orderByDesc('id')
+            ->paginate(15)
+            ->withQueryString();
+
+        $daftarPeriode = $akses->batasi(
+            Krs::query(),
+            $user
+        )
+            ->join(
+                'registrasi_semester',
+                'registrasi_semester.id',
+                '=',
+                'krs.registrasi_semester_id'
+            )
+            ->join(
+                'periode_akademik',
+                'periode_akademik.id',
+                '=',
+                'registrasi_semester.periode_akademik_id'
+            )
+            ->select([
+                'periode_akademik.id',
+                'periode_akademik.kode',
+                'periode_akademik.mulai',
+            ])
+            ->distinct()
+            ->orderByDesc('periode_akademik.mulai')
+            ->get();
+
+        return view('portal.krs.index', [
+            'daftarKrs' => $daftarKrs,
+            'daftarPeriode' => $daftarPeriode,
+            'filter' => $filter,
+        ]);
+    }
+
+    public function show(
+        Request $request,
+        Krs $krs,
+        AksesKrsMahasiswa $akses
+    ): View {
+        /** @var User $user */
+        $user = $request->user();
+
+        // Menggunakan 404 agar identitas KRS milik orang lain
+        // tidak dibocorkan kepada pengguna.
+        abort_unless(
+            $akses->lihat($user, $krs),
+            404
+        );
+
+        $krs->load($this->relasi());
+
+        return view('portal.krs.show', [
+            'krs' => $krs,
+            'registrasi' => $krs->registrasiSemester,
+            'bolehCetak' => $akses->cetak($user, $krs),
+        ]);
+    }
+
+    public function cetak(
+        Request $request,
+        Krs $krs,
+        AksesKrsMahasiswa $akses
+    ): View {
+        /** @var User $user */
+        $user = $request->user();
+
+        abort_unless(
+            $akses->lihat($user, $krs),
+            404
+        );
+
+        abort_unless(
+            $akses->cetak($user, $krs),
+            409,
+            'KRS hanya dapat dicetak setelah disahkan.'
+        );
+
+        $krs->load($this->relasi());
+
+        return view('portal.krs.cetak', [
+            'krs' => $krs,
+            'registrasi' => $krs->registrasiSemester,
+            'dicetakPada' => now('UTC'),
+        ]);
+    }
+
+    private function relasi(): array
+    {
+        return [
+            'registrasiSemester.riwayatStudi.mahasiswa.user',
+            'registrasiSemester.riwayatStudi.kurikulum.programStudi',
+            'registrasiSemester.periodeAkademik',
+            'registrasiSemester.rombel.paketSemester',
+            'details.kelasKuliah',
+            'pengesah',
+        ];
+    }
+}
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\app\Models\DetailKrs.php ===
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+
+class DetailKrs extends Model
+{
+    public const TERDAFTAR = 'terdaftar';
+    public const AKTIF = 'aktif';
+    public const DIBATALKAN = 'dibatalkan';
+    public const STATUS = [
+        self::TERDAFTAR => 'Menunggu pengesahan',
+        self::AKTIF => 'Disahkan',
+        self::DIBATALKAN => 'Dibatalkan',
+    ];
+
+    protected $table = 'detail_krs';
+    protected $guarded = ['*'];
+
+    protected function casts(): array
+    {
+        return [
+            'krs_id' => 'integer',
+            'kelas_kuliah_id' => 'integer',
+            'aktif_at' => 'immutable_datetime',
+            'batal_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime',
+        ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $detail): void {
+            if (DB::transactionLevel() < 1 || $detail->krs_id < 1 || $detail->kelas_kuliah_id < 1) {
+                self::gagal('Detail KRS harus disimpan melalui transaksi KelolaKrs.');
+            }
+
+            if ($detail->exists && $detail->isDirty(['krs_id', 'kelas_kuliah_id'])) {
+                self::gagal('KRS dan kelas pada detail tidak boleh diganti.');
+            }
+
+            if (! $detail->exists && $detail->status !== self::TERDAFTAR) {
+                self::gagal('Detail baru harus berstatus terdaftar.');
+            }
+
+            $valid = match ($detail->status) {
+                self::TERDAFTAR => $detail->aktif_at === null && $detail->batal_at === null,
+                self::AKTIF => $detail->aktif_at !== null && $detail->batal_at === null,
+                self::DIBATALKAN => $detail->batal_at !== null
+                    && ($detail->aktif_at === null || $detail->batal_at->gte($detail->aktif_at)),
+                default => false,
+            };
+
+            if (! $valid) {
+                self::gagal('Status dan waktu pada detail KRS tidak sesuai.');
+            }
+        });
+
+        static::deleting(function (): never {
+            self::gagal('Detail KRS tidak dihapus; riwayat peserta harus dipertahankan.');
+        });
+    }
+
+    public function krs(): BelongsTo
+    {
+        return $this->belongsTo(Krs::class, 'krs_id');
+    }
+
+    public function kelasKuliah(): BelongsTo
+    {
+        return $this->belongsTo(KelasKuliah::class, 'kelas_kuliah_id');
+    }
+
+    public function scopeDisahkan(Builder $query): Builder
+    {
+        return $query->where('detail_krs.status', self::AKTIF)
+            ->whereHas('krs', fn(Builder $krs) => $krs->where('status', Krs::DISAHKAN));
+    }
+
+    public function scopePesertaAktif(Builder $query): Builder
+    {
+        return $query->disahkan()
+            ->whereHas('krs.registrasiSemester', fn(Builder $reg) => $reg->where('status', RegistrasiSemester::AKTIF))
+            ->whereHas('krs.registrasiSemester.riwayatStudi', fn(Builder $rs) => $rs->where('status', RiwayatStudi::AKTIF))
+            ->whereHas('kelasKuliah', fn(Builder $kelas) => $kelas->where('status', KelasKuliah::AKTIF))
+            ->whereHas('kelasKuliah.rombel.periodeAkademik', fn(Builder $periode) => $periode->where('status', 'aktif'));
+    }
+
+    private static function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages(['krs' => $pesan]);
+    }
+
+    public function pengumpulan(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\Pengumpulan::class, 'detail_krs_id');
+    }
+}
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\app\Models\Krs.php ===
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+
+class Krs extends Model
+{
+    public const DRAF = 'draf';
+    public const DIAJUKAN = 'diajukan';
+    public const DISAHKAN = 'disahkan';
+    public const DIBATALKAN = 'dibatalkan';
+
+    public const STATUS = [
+        self::DRAF => 'Draf',
+        self::DIAJUKAN => 'Diajukan',
+        self::DISAHKAN => 'Disahkan',
+        self::DIBATALKAN => 'Dibatalkan',
+    ];
+
+    public const OPERASI = [
+        'buat' => 'Membuat draf',
+        'ubah' => 'Mengubah catatan draf',
+        'ajukan' => 'Mengajukan KRS',
+        'kembalikan' => 'Mengembalikan ke draf',
+        'sahkan' => 'Mengesahkan KRS',
+        'revisi' => 'Membuka revisi',
+        'pulihkan' => 'Memulihkan ke draf',
+        'batalkan' => 'Membatalkan KRS',
+    ];
+
+    protected $table = 'krs';
+    protected $guarded = ['*'];
+
+    protected function casts(): array
+    {
+        return [
+            'registrasi_semester_id' => 'integer',
+            'disahkan_oleh' => 'integer',
+            'versi' => 'integer',
+            'diajukan_at' => 'immutable_datetime',
+            'disahkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime',
+        ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $krs): void {
+            $valid = DB::transactionLevel() > 0
+                && isset(self::STATUS[$krs->status])
+                && $krs->registrasi_semester_id > 0
+                && $krs->versi >= 1 && $krs->versi <= 4294967295;
+
+            if (! $valid) {
+                self::gagal('KRS harus disimpan melalui transaksi KelolaKrs.');
+            }
+
+            if (! $krs->exists) {
+                if ($krs->status !== self::DRAF || $krs->versi !== 1) {
+                    self::gagal('KRS baru harus berupa draf versi 1.');
+                }
+            } else {
+                if (
+                    $krs->isDirty('registrasi_semester_id')
+                    || $krs->versi !== (int) $krs->getRawOriginal('versi') + 1
+                ) {
+                    self::gagal('Registrasi tetap dan versi KRS harus bertambah satu.');
+                }
+
+                $asal = $krs->getRawOriginal('status');
+                $transisi = [
+                    self::DRAF => [self::DRAF, self::DIAJUKAN, self::DIBATALKAN],
+                    self::DIAJUKAN => [self::DRAF, self::DISAHKAN, self::DIBATALKAN],
+                    self::DISAHKAN => [self::DRAF, self::DIBATALKAN],
+                    self::DIBATALKAN => [self::DRAF],
+                ];
+
+                if (! in_array($krs->status, $transisi[$asal] ?? [], true)) {
+                    self::gagal('Perubahan status KRS tidak diizinkan.');
+                }
+            }
+
+            $diajukan = $krs->diajukan_at;
+            $disahkan = $krs->disahkan_at;
+            $pengesah = $krs->disahkan_oleh;
+            $pasanganSah = ($disahkan === null && $pengesah === null)
+                || ($disahkan !== null && $pengesah !== null && $diajukan !== null
+                    && $disahkan->gte($diajukan));
+
+            $metadataValid = $pasanganSah && match ($krs->status) {
+                self::DRAF => $diajukan === null && $disahkan === null,
+                self::DIAJUKAN => $diajukan !== null && $disahkan === null,
+                self::DISAHKAN => $diajukan !== null && $disahkan !== null,
+                self::DIBATALKAN => true,
+                default => false,
+            };
+
+            if (! $metadataValid) {
+                self::gagal('Waktu pengajuan dan pengesahan tidak sesuai status KRS.');
+            }
+        });
+
+        static::deleting(function (): never {
+            self::gagal('KRS tidak dihapus. Gunakan pembatalan agar riwayat terjaga.');
+        });
+    }
+
+    public function registrasiSemester(): BelongsTo
+    {
+        return $this->belongsTo(RegistrasiSemester::class, 'registrasi_semester_id');
+    }
+
+    public function details(): HasMany
+    {
+        return $this->hasMany(DetailKrs::class, 'krs_id');
+    }
+
+    public function pengesah(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'disahkan_oleh');
+    }
+
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'krs');
+    }
+
+    public function operasiTersedia(): array
+    {
+        $operasi = match ($this->status) {
+            self::DRAF => ['ajukan', 'batalkan'],
+            self::DIAJUKAN => ['sahkan', 'kembalikan', 'batalkan'],
+            self::DISAHKAN => ['revisi', 'batalkan'],
+            self::DIBATALKAN => ['pulihkan'],
+            default => [],
+        };
+
+        return array_intersect_key(self::OPERASI, array_flip($operasi));
+    }
+
+    public function versiForm(): string
+    {
+        $this->loadMissing(['registrasiSemester', 'details.kelasKuliah']);
+        $atribut = static function (Model $model): array {
+            $data = $model->getRawOriginal();
+            ksort($data);
+            return $data;
+        };
+
+        $data = [
+            'krs' => $atribut($this),
+            'registrasi' => $atribut($this->registrasiSemester),
+            'details' => $this->details->sortBy('id')->map(
+                fn(DetailKrs $detail): array => [
+                    'detail' => $atribut($detail),
+                    'kelas' => $atribut($detail->kelasKuliah),
+                ]
+            )->values()->all(),
+        ];
+
+        return hash_hmac('sha256', json_encode($data, JSON_THROW_ON_ERROR), (string) config('app.key'));
+    }
+
+    public function ringkasanAudit(): array
+    {
+        return [
+            'krs_id' => $this->id,
+            'registrasi_semester_id' => $this->registrasi_semester_id,
+            'status' => $this->status,
+            'versi' => $this->versi,
+            'catatan' => $this->catatan,
+            'diajukan_at_utc' => $this->diajukan_at?->toDateTimeString(),
+            'disahkan_at_utc' => $this->disahkan_at?->toDateTimeString(),
+            'disahkan_oleh' => $this->disahkan_oleh,
+            'details' => $this->details->sortBy('id')->map(
+                fn(DetailKrs $detail): array => [
+                    'id' => $detail->id,
+                    'kelas_kuliah_id' => $detail->kelas_kuliah_id,
+                    'status' => $detail->status,
+                    'aktif_at_utc' => $detail->aktif_at?->toDateTimeString(),
+                    'batal_at_utc' => $detail->batal_at?->toDateTimeString(),
+                ]
+            )->values()->all(),
+        ];
+    }
+
+    // Decimal satu angka dihitung sebagai integer persepuluhan, tanpa float.
+    public function totalSks(): string
+    {
+        $this->loadMissing('details.kelasKuliah');
+        $jumlah = $this->details->sum(function (DetailKrs $detail): int {
+            [$utuh, $pecahan] = array_pad(explode('.', (string) $detail->kelasKuliah->sks_snapshot, 2), 2, '0');
+            return ((int) $utuh * 10) + (int) str_pad($pecahan, 1, '0');
+        });
+
+        return intdiv($jumlah, 10) . '.' . ($jumlah % 10);
+    }
+
+    private static function gagal(string $pesan): never
+    {
+        throw ValidationException::withMessages(['krs' => $pesan]);
+    }
+}
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\cetak.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\create.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\edit.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\index.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\show.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\_audit.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\_form.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\_identitas.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\_mata_kuliah.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\admin\krs\_operasi.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\portal\krs\cetak.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\portal\krs\index.blade.php ===
+
+=== FILE: D:\xampp\htdocs\siakad-ilyas\resources\views\portal\krs\show.blade.php ===

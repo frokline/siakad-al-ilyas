@@ -1,56 +1,199 @@
 @extends('layouts.pengumpulan')
-@section('title', 'Daftar Jawaban')
+
+@section('title', 'Daftar Pengumpulan')
+
 @section('content')
     <div class="heading">
         <div>
-            <h1>Daftar jawaban</h1>
-            <p>Draf hanya terlihat oleh pemilik. Pengelola hanya melihat kiriman final kelasnya.</p>
+            <p>Pembelajaran</p>
+            <h1>Daftar pengumpulan</h1>
+
+            <p>
+                Daftar jawaban tugas yang dapat Anda akses.
+            </p>
         </div>
-        <a class="button" href="{{ route('kegiatan.index') }}">Pilih kegiatan</a>
     </div>
-    <form class="card filters" method="get" action="{{ route('pengumpulan.index') }}">
-        <div class="field"><label for="q">Judul kegiatan</label><input id="q" name="q" maxlength="100"
-                value="{{ $filter['q'] ?? '' }}"></div>
-        <div class="field"><label for="kegiatan">ID kegiatan</label><input id="kegiatan" type="number" name="kegiatan"
-                min="1" value="{{ $filter['kegiatan'] ?? '' }}"></div>
-        <div class="field"><label for="status">Status</label><select id="status" name="status">
-                <option value="">Semua yang berhak dilihat</option>
-                @foreach (['draf' => 'Draf saya', 'dikirim' => 'Semua versi terkirim', 'berlaku' => 'Kiriman yang berlaku'] as $nilai => $label)
-                    <option value="{{ $nilai }}" @selected(($filter['status'] ?? '') === $nilai)>{{ $label }}</option>
-                @endforeach
-            </select></div>
-        <button type="submit">Tampilkan</button><a href="{{ route('pengumpulan.index') }}">Reset</a>
+
+    <form
+        method="get"
+        action="{{ route('pengumpulan.index') }}"
+        class="card form-card"
+    >
+        <h2>Cari pengumpulan</h2>
+
+        <div class="field">
+            <label for="q">
+                Judul pembelajaran
+            </label>
+
+            <input
+                id="q"
+                name="q"
+                type="search"
+                maxlength="100"
+                value="{{ $filter['q'] ?? '' }}"
+            >
+        </div>
+
+        <div class="field">
+            <label for="status">
+                Status jawaban
+            </label>
+
+            <select id="status" name="status">
+                <option value="">
+                    Semua status
+                </option>
+
+                <option
+                    value="berlaku"
+                    @selected(
+                        ($filter['status'] ?? '') === 'berlaku'
+                    )
+                >
+                    Jawaban aktif
+                </option>
+
+                <option
+                    value="{{ \App\Models\Pengumpulan::TERKIRIM }}"
+                    @selected(
+                        ($filter['status'] ?? '')
+                            === \App\Models\Pengumpulan::TERKIRIM
+                    )
+                >
+                    Terkirim
+                </option>
+
+                <option
+                    value="{{ \App\Models\Pengumpulan::DIBATALKAN }}"
+                    @selected(
+                        ($filter['status'] ?? '')
+                            === \App\Models\Pengumpulan::DIBATALKAN
+                    )
+                >
+                    Dibatalkan
+                </option>
+            </select>
+        </div>
+
+        @if (! empty($filter['kegiatan']))
+            <input
+                type="hidden"
+                name="kegiatan"
+                value="{{ $filter['kegiatan'] }}"
+            >
+        @endif
+
+        <div class="actions">
+            <button type="submit">
+                Cari
+            </button>
+
+            <a href="{{ route('pengumpulan.index') }}">
+                Reset
+            </a>
+        </div>
     </form>
+
     <section class="card table-wrap">
+        <h2>Jawaban</h2>
+
         <table>
             <thead>
                 <tr>
-                    <th>Kegiatan</th>
+                    <th>Pembelajaran</th>
                     <th>Mahasiswa</th>
-                    <th>Versi</th>
                     <th>Status</th>
-                    <th>Dikirim ({{ $zona }})</th>
+                    <th>Waktu</th>
                     <th>Aksi</th>
                 </tr>
             </thead>
+
             <tbody>
-                @forelse($daftar as $p)
+                @forelse ($daftar as $item)
+                    @php
+                        $status = \App\Models\Pengumpulan::STATUS[
+                            $item->status
+                        ] ?? $item->status;
+
+                        $aktif = in_array(
+                            (int) $item->id,
+                            $berlakuIds,
+                            true
+                        );
+                    @endphp
+
                     <tr>
-                        <td>{{ $p->kegiatan->judul }}<small>{{ $p->kegiatan->kelasKuliah->kode }}</small></td>
-                        <td>{{ $p->pemilik->nama }}</td>
-                        <td>{{ $p->versi }}</td>
-                        <td>{{ \App\Models\Pengumpulan::STATUS[$p->status] }} @if (in_array($p->id, $berlakuIds, true))
-                                <span class="badge">Berlaku</span>
+                        <td>
+                            <strong>
+                                {{ $item->kegiatan?->judul
+                                    ?? 'Pembelajaran tidak tersedia' }}
+                            </strong>
+
+                            <br>
+
+                            <small>
+                                {{ $item->kegiatan?->kelasKuliah?->kode
+                                    ?? '—' }}
+                            </small>
+                        </td>
+
+                        <td>
+                            {{ $item->pemilik?->nama ?? '—' }}
+                        </td>
+
+                        <td>
+                            {{ $status }}
+
+                            @if ($aktif)
+                                <small>— jawaban aktif</small>
                             @endif
                         </td>
-                        <td>{{ $p->dikirim_at?->setTimezone($zona)->format('d-m-Y H:i:s') ?? 'Belum dikirim' }}</td>
-                        <td><a href="{{ route('pengumpulan.show', $p) }}">Lihat</a></td>
+
+                        <td>
+                            @if (
+                                $item->status
+                                    === \App\Models\Pengumpulan::DIBATALKAN
+                                && $item->dibatalkan_at
+                            )
+                                Dibatalkan:
+                                {{ $item->dibatalkan_at
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @elseif ($item->diubah_at)
+                                Diubah:
+                                {{ $item->diubah_at
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @elseif ($item->dikirim_at)
+                                Dikirim:
+                                {{ $item->dikirim_at
+                                    ->setTimezone($zona)
+                                    ->format('d-m-Y H:i') }}
+                            @else
+                                —
+                            @endif
+                        </td>
+
+                        <td>
+                            <a href="{{ route(
+                                'pengumpulan.show',
+                                $item
+                            ) }}">
+                                Detail
+                            </a>
+                        </td>
                     </tr>
-                @empty<tr>
-                        <td colspan="6">Belum ada jawaban yang dapat ditampilkan. Mulai dari menu Tugas dan Ujian.</td>
+                @empty
+                    <tr>
+                        <td colspan="5">
+                            Belum ada pengumpulan yang dapat ditampilkan.
+                        </td>
                     </tr>
                 @endforelse
             </tbody>
-        </table>{{ $daftar->links('pengumpulan._pagination') }}
+        </table>
+
+        {{ $daftar->links('pengumpulan._pagination') }}
     </section>
 @endsection

@@ -10,9 +10,17 @@
 
 <body>
     <a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('keuangan.jenis-biaya.index') }}">ILYAS INSTITUTE <small>Jenis
+    <header class="topbar"><a class="brand" href="{{ route('keuangan.dashboard') }}">ILYAS INSTITUTE <small>Jenis
                 Biaya</small></a>
         <nav aria-label="Menu utama">
+<a
+    href="{{ route('keuangan.dashboard') }}"
+    @if (request()->routeIs('keuangan.dashboard'))
+        aria-current="page"
+    @endif
+>
+    Dashboard
+</a>
             <a href="{{ route('keuangan.jenis-biaya.index') }}">Jenis biaya</a>
             @can('akses-berkas')
                 <a href="{{ route('berkas.index') }}">Berkas saya</a>

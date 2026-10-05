@@ -12,31 +12,53 @@ class BerkasRequest extends FormRequest
         if ($this->routeIs('berkas.store')) {
             return $this->user()?->can('create', Berkas::class) ?? false;
         }
+
         $file = $this->route('berkas');
-        return $file instanceof Berkas && ($this->user()?->can('view', $file) ?? false);
+
+        return $file instanceof Berkas
+            && ($this->user()?->can('view', $file) ?? false);
     }
+
     protected function prepareForValidation(): void
     {
         foreach (['label', 'keterangan', 'alasan'] as $key) {
             if (is_string($this->input($key))) {
                 $value = trim($this->input($key));
-                $this->merge([$key => $value === '' ? null : $value]);
+
+                $this->merge([
+                    $key => $value === '' ? null : $value,
+                ]);
             }
         }
     }
+
     public function rules(): array
     {
-        $metadata = ['label' => ['required', 'string', 'max:200'], 'keterangan' => ['nullable', 'string', 'max:2000']];
+        $metadata = [
+            'label' => ['required', 'string', 'max:200'],
+            'keterangan' => ['nullable', 'string', 'max:2000'],
+        ];
+
         if ($this->routeIs('berkas.store')) {
             return $metadata + [
                 'upload_token' => ['required', 'uuid'],
-                'file' => ['required', 'file', 'min:1', 'max:' . config('berkas.maks_kib'), 'mimes:pdf,jpg,jpeg,png']
+                'file' => [
+                    'required',
+                    'file',
+                    'min:1',
+                    'max:' . config('berkas.maks_kib'),
+                    'mimes:pdf,jpg,jpeg,png,doc,docx,xls,xlsx,ppt,pptx,zip',
+                ],
             ];
         }
+
         $rules = [
             'versi' => ['required', 'string', 'regex:/\A[a-f0-9]{64}\z/'],
-            'alasan' => ['required', 'string', 'min:10', 'max:2000']
+            'alasan' => ['required', 'string', 'min:10', 'max:2000'],
         ];
-        return $this->routeIs('berkas.update') ? $rules + $metadata : $rules + ['konfirmasi' => ['accepted']];
+
+        return $this->routeIs('berkas.update')
+            ? $rules + $metadata
+            : $rules + ['konfirmasi' => ['accepted']];
     }
 }

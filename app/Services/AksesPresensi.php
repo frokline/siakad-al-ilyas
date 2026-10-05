@@ -51,6 +51,24 @@ final class AksesPresensi
         return $query->whereIn('kelas_kuliah_id', $this->penugasan($user)->select('kelas_kuliah_id'));
     }
 
+    public function lihatKelas(User $user, int $kelasId): bool
+    {
+        return $this->admin($user) || ($this->dosen($user)
+            && $this->penugasan($user)->where('kelas_kuliah_id', $kelasId)->exists());
+    }
+
+    /** Batasi query KelasKuliah ke kelas yang boleh dilihat rekapnya. */
+    public function batasiKelas(Builder $query, User $user): Builder
+    {
+        if ($this->admin($user)) {
+            return $query;
+        }
+        if (! $this->dosen($user)) {
+            return $query->whereRaw('1 = 0');
+        }
+        return $query->whereIn($query->getModel()->getQualifiedKeyName(), $this->penugasan($user)->select('kelas_kuliah_id'));
+    }
+
     public function konteksAktif(Pertemuan $sesi): bool
     {
         $sesi->loadMissing('kelasKuliah.rombel.periodeAkademik');
@@ -62,6 +80,26 @@ final class AksesPresensi
     {
         return $this->lihat($user, $sesi) && $this->konteksAktif($sesi)
             && $sesi->status === Pertemuan::BERLANGSUNG;
+    }
+
+    /** Penjelasan untuk antarmuka: mengapa pengguna tidak dapat memulai/menyelesaikan pertemuan. */
+    public function alasanJalankan(User $user, Pertemuan $sesi): ?string
+    {
+        if ($this->jalankan($user, $sesi)) {
+            return null;
+        }
+        if (! $this->dosen($user)) {
+            return 'Akun Anda tidak berstatus dosen aktif, sehingga tidak dapat memulai atau menyelesaikan pertemuan.';
+        }
+        $penanggungJawab = $this->penugasan($user)->whereKey($sesi->pengajar_kelas_id)
+            ->where('kelas_kuliah_id', $sesi->kelas_kuliah_id)->exists();
+        if (! $penanggungJawab) {
+            return 'Hanya dosen penanggung jawab pertemuan ini (atau admin akademik) yang dapat memulai dan menyelesaikannya. Anda tetap dapat mengisi presensi.';
+        }
+        if (! $this->konteksAktif($sesi)) {
+            return 'Kelas atau periode akademik belum berstatus aktif, sehingga pertemuan belum dapat dijalankan.';
+        }
+        return null;
     }
 
     public function jalankan(User $user, Pertemuan $sesi): bool

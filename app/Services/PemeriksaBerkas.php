@@ -8,6 +8,30 @@ use Symfony\Component\Process\Process;
 
 final class PemeriksaBerkas
 {
+    private const TIPE = [
+        'pdf' => ['application/pdf'],
+        'jpg' => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png' => ['image/png'],
+        'doc' => ['application/msword'],
+        'docx' => [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ],
+        'xls' => ['application/vnd.ms-excel'],
+        'xlsx' => [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ],
+        'ppt' => ['application/vnd.ms-powerpoint'],
+        'pptx' => [
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ],
+        'zip' => [
+            'application/zip',
+            'application/x-zip-compressed',
+            'multipart/x-zip',
+        ],
+    ];
+
     public function periksa(UploadedFile $file): array
     {
         if (
@@ -20,45 +44,25 @@ final class PemeriksaBerkas
             );
         }
 
-        $tipe = [
-            'pdf' => 'application/pdf',
-            'jpg' => 'image/jpeg',
-            'jpeg' => 'image/jpeg',
-            'png' => 'image/png',
-        ];
-
         $ext = strtolower($file->getClientOriginalExtension());
         $mime = $file->getMimeType();
 
-        if (! isset($tipe[$ext]) || $tipe[$ext] !== $mime) {
+        if (
+            ! isset(self::TIPE[$ext])
+            || ! in_array($mime, self::TIPE[$ext], true)
+        ) {
             $this->gagal(
-                'Gunakan PDF, JPG, atau PNG dengan isi dan ekstensi yang sesuai.'
+                'Format berkas tidak diizinkan atau isi berkas tidak sesuai ekstensinya.'
             );
         }
 
         $path = $file->getRealPath();
 
-        if ($mime === 'application/pdf') {
-            $awal = file_get_contents($path, false, null, 0, 5);
-
-            if ($awal !== '%PDF-') {
-                $this->gagal('Header PDF tidak sesuai.');
-            }
-        } else {
-            $gambar = @getimagesize($path);
-
-            if (
-                ! is_array($gambar)
-                || ($gambar['mime'] ?? '') !== $mime
-                || $gambar[0] < 1
-                || $gambar[1] < 1
-                || $gambar[0] * $gambar[1] > (int) config('berkas.maks_piksel')
-            ) {
-                $this->gagal(
-                    'Gambar tidak valid atau dimensinya terlalu besar.'
-                );
-            }
+        if (! is_string($path) || $path === '') {
+            $this->gagal('Berkas sementara tidak dapat dibaca.');
         }
+
+        $this->pastikanFormatSesuai($path, $ext, $mime);
 
         $scanner = (string) config('berkas.scanner');
 
@@ -129,6 +133,133 @@ final class PemeriksaBerkas
                 ? 'clamav'
                 : 'format',
         ];
+    }
+
+    private function pastikanFormatSesuai(
+        string $path,
+        string $ext,
+        string $mime
+    ): void {
+        if ($ext === 'pdf') {
+            $awal = file_get_contents($path, false, null, 0, 5);
+
+            if ($awal !== '%PDF-') {
+                $this->gagal('Header PDF tidak sesuai.');
+            }
+
+            return;
+        }
+
+        if (in_array($ext, ['jpg', 'jpeg', 'png'], true)) {
+            $gambar = @getimagesize($path);
+
+            if (
+                ! is_array($gambar)
+                || ($gambar['mime'] ?? '') !== $mime
+                || $gambar[0] < 1
+                || $gambar[1] < 1
+                || $gambar[0] * $gambar[1]
+                    > (int) config('berkas.maks_piksel')
+            ) {
+                $this->gagal(
+                    'Gambar tidak valid atau dimensinya terlalu besar.'
+                );
+            }
+
+            return;
+        }
+
+        if (in_array($ext, ['doc', 'xls', 'ppt'], true)) {
+            $awal = file_get_contents($path, false, null, 0, 8);
+
+            if ($awal !== hex2bin('D0CF11E0A1B11AE1')) {
+                $this->gagal(
+                    'Berkas Office lama tidak memiliki struktur yang sesuai.'
+                );
+            }
+
+            return;
+        }
+
+        if (
+            in_array($ext, ['docx', 'xlsx', 'pptx'], true)
+            && ! $this->arsipOfficeSesuai($path, $ext)
+        ) {
+            $this->gagal(
+                'Berkas Office tidak memiliki struktur yang sesuai.'
+            );
+        }
+
+        if ($ext === 'zip' && ! $this->arsipZipSesuai($path)) {
+            $this->gagal('Berkas ZIP tidak memiliki struktur yang sesuai.');
+        }
+    }
+
+    private function arsipOfficeSesuai(
+        string $path,
+        string $ext
+    ): bool {
+        $folder = [
+            'docx' => 'word/',
+            'xlsx' => 'xl/',
+            'pptx' => 'ppt/',
+        ][$ext];
+
+        return $this->arsipMemiliki(
+            $path,
+            static function (\ZipArchive $zip) use ($folder): bool {
+                if ($zip->locateName('[Content_Types].xml') === false) {
+                    return false;
+                }
+
+                for ($nomor = 0; $nomor < $zip->numFiles; $nomor++) {
+                    $nama = $zip->getNameIndex($nomor);
+
+                    if (
+                        is_string($nama)
+                        && str_starts_with($nama, $folder)
+                    ) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        );
+    }
+
+    private function arsipZipSesuai(string $path): bool
+    {
+        return $this->arsipMemiliki(
+            $path,
+            static function (\ZipArchive $zip): bool {
+                return $zip->numFiles >= 0;
+            }
+        );
+    }
+
+    private function arsipMemiliki(
+        string $path,
+        callable $pemeriksa
+    ): bool {
+        if (! class_exists(\ZipArchive::class)) {
+            $this->gagal(
+                'Ekstensi PHP ZIP belum aktif. Hubungi pengelola sistem.'
+            );
+        }
+
+        $zip = new \ZipArchive();
+        $hasil = $zip->open($path);
+
+        if ($hasil !== true) {
+            return false;
+        }
+
+        try {
+            return (bool) $pemeriksa($zip);
+        } finally {
+            $zip->close();
+        }
     }
 
     private function gagal(string $pesan): never

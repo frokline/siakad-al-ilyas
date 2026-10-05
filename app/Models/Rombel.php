@@ -11,6 +11,7 @@ use \App\Models\Concerns\MenjagaKapasitasRegistrasi;
 class Rombel extends Model
 {
     use HasFactory;
+    use MenjagaKapasitasRegistrasi;
 
     public const STATUS_PERIODE_TERBUKA = [
         'persiapan',

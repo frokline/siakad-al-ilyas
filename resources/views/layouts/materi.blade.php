@@ -12,22 +12,7 @@
     <a class="skip" href="#konten">Langsung ke isi</a>
     <header class="topbar">
         <a class="brand" href="{{ route('materi.index') }}">ILYAS INSTITUTE <small>Materi Kuliah</small></a>
-        <nav aria-label="Menu utama">
-            <a href="{{ route('materi.index') }}">Materi</a>
-            @can('akses-berkas')
-                <a href="{{ route('berkas.index') }}">Berkas saya</a>
-            @endcan
-            @can('akses-presensi')
-                <a href="{{ route('presensi.index') }}">Presensi</a>
-            @endcan
-
-            @can('akses-kegiatan')
-                <a href="{{ route('kegiatan.index') }}">Tugas dan Ujian</a>
-            @endcan
-            <span>{{ auth('web')->user()->nama }}</span>
-            <form method="post" action="{{ route('berkas.logout') }}">@csrf<button type="submit"
-                    class="secondary">Keluar</button></form>
-        </nav>
+        @include('partials.navbar-portal')
     </header>
     <main id="konten" class="container">
         @if (session('info'))

@@ -29,6 +29,7 @@ class RoleController extends Controller
 
         $roles = Role::query()
             ->select(self::RESPONSE_FIELDS)
+            ->withCount('users')
             ->orderBy('id')
             ->get();
 

@@ -11,14 +11,7 @@
 <body><a class="skip" href="#konten">Langsung ke isi</a>
     <header class="topbar"><a class="brand" href="{{ route('notifikasi.index') }}">ILYAS INSTITUTE
             <small>Notifikasi</small></a>
-        <nav aria-label="Menu utama"><a href="{{ route('notifikasi.index') }}">Notifikasi saya</a>
-            @can('akses-pengumuman')
-                <a href="{{ route('pengumuman.index') }}">Pengumuman</a>
-            @endcan
-            <span>{{ auth('web')->user()->nama }}</span>
-            <form method="post" action="{{ route('berkas.logout') }}">@csrf<button type="submit"
-                    class="secondary">Keluar</button></form>
-        </nav>
+        @include('partials.navbar-portal')
     </header>
     <main class="container" id="konten">
         @if (session('info'))

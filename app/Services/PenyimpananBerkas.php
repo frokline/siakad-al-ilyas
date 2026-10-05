@@ -24,7 +24,7 @@ final class PenyimpananBerkas
     {
         if (
             ! in_array($file->storage_disk, config('berkas.disk_diizinkan'), true)
-            || ! preg_match('~\Asiakad/berkas/[0-9]{4}/[0-9]{2}/[a-f0-9-]{36}\.(pdf|jpg|png)\z~', $file->object_key)
+            || ! preg_match('~\Asiakad/berkas/[0-9]{4}/[0-9]{2}/[a-f0-9-]{36}\.(pdf|jpg|png|doc|docx|xls|xlsx|ppt|pptx|zip)\z~', $file->object_key)
         ) {
             throw new RuntimeException('Lokasi berkas tidak sesuai konfigurasi.');
         }

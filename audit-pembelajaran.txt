@@ -1,0 +1,2098 @@
+
+================================================================================
+FILE: .\app\Services\AksesBerkas.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+
+class AksesBerkas
+{
+    public function masuk(User $user): bool
+    {
+        // Kode role mengikuti tabel roles proyek; akun dan profil selalu diperiksa di server.
+        return User::query()->whereKey($user->id)->where('status', 'aktif')
+            ->where(function (Builder $q): void {
+                $q->whereHas('roles', fn(Builder $r) => $r->whereIn('roles.kode', ['admin_akademik', 'admin_keuangan']))
+                    ->orWhere(function (Builder $d): void {
+                        $d->whereHas('roles', fn(Builder $r) => $r->where('roles.kode', 'dosen'))
+                            ->whereHas('dosen', fn(Builder $p) => $p->where('status', 'aktif'));
+                    })->orWhere(function (Builder $m): void {
+                        $m->whereHas('roles', fn(Builder $r) => $r->where('roles.kode', 'mahasiswa'))->has('mahasiswa');
+                    });
+            })->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Services\AksesMateri.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\KelasKuliah;
+use App\Models\Materi;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+
+class AksesMateri
+{
+    public function role(User $user, string $kode): bool
+    {
+        return User::query()->whereKey($user->id)->where('status', 'aktif')
+            ->whereHas('roles', fn(Builder $q) => $q->where('roles.kode', $kode))->exists();
+    }
+    public function admin(User $user): bool
+    {
+        return $this->role($user, 'admin_akademik');
+    }
+    public function dosen(User $user): bool
+    {
+        return $this->role($user, 'dosen') && DB::table('dosen')->where('user_id', $user->id)->where('status', 'aktif')->exists();
+    }
+    public function mahasiswa(User $user): bool
+    {
+        return $this->role($user, 'mahasiswa') && DB::table('mahasiswa')->where('user_id', $user->id)->exists();
+    }
+    public function masuk(User $user): bool
+    {
+        return $this->admin($user) || $this->dosen($user) || $this->mahasiswa($user);
+    }
+    public function pengelola(User $user): bool
+    {
+        return $this->admin($user) || $this->dosen($user);
+    }
+
+    public function kelasKelola(User $user): Builder
+    {
+        $q = KelasKuliah::query();
+        if ($this->admin($user)) {
+            return $q;
+        }
+        if (! $this->dosen($user)) {
+            return $q->whereRaw('1 = 0');
+        }
+        return $q->whereIn('kelas_kuliah.id', DB::table('pengajar_kelas as p')
+            ->join('dosen as d', 'd.id', '=', 'p.dosen_id')->where('p.aktif', true)
+            ->where('d.user_id', $user->id)->where('d.status', 'aktif')->select('p.kelas_kuliah_id'));
+    }
+
+    public function kelasPeserta(User $user): Builder
+    {
+        $q = KelasKuliah::query()->whereIn('kelas_kuliah.status', ['aktif', 'selesai']);
+        if (! $this->mahasiswa($user)) {
+            return $q->whereRaw('1 = 0');
+        }
+        return $q->whereIn('kelas_kuliah.id', DB::table('detail_krs as d')
+            ->join('krs as k', 'k.id', '=', 'd.krs_id')
+            ->join('registrasi_semester as r', 'r.id', '=', 'k.registrasi_semester_id')
+            ->join('riwayat_studi as h', 'h.id', '=', 'r.riwayat_studi_id')
+            ->join('mahasiswa as m', 'm.id', '=', 'h.mahasiswa_id')
+            ->join('kelas_kuliah as c', 'c.id', '=', 'd.kelas_kuliah_id')
+            ->join('rombel as b', 'b.id', '=', 'c.rombel_id')
+            ->where('m.user_id', $user->id)->where('d.status', 'aktif')->where('k.status', 'disahkan')
+            ->where('r.status', 'aktif')->where('h.status', 'aktif')
+            ->whereColumn('r.rombel_id', 'b.id')->whereColumn('r.periode_akademik_id', 'b.periode_akademik_id')
+            ->select('d.kelas_kuliah_id'));
+    }
+
+    public function kelola(User $user, int $kelasId): bool
+    {
+        return $this->kelasKelola($user)->whereKey($kelasId)->exists();
+    }
+    public function konteksTulis(int $kelasId): bool
+    {
+        return KelasKuliah::query()->whereKey($kelasId)->whereIn('status', ['persiapan', 'aktif'])
+            ->whereHas('rombel.periodeAkademik', fn(Builder $q) => $q->where('status', 'aktif'))->exists();
+    }
+    public function batasi(Builder $q, User $user): Builder
+    {
+        $kelola = $this->kelasKelola($user)->select('kelas_kuliah.id');
+        $peserta = $this->kelasPeserta($user)->select('kelas_kuliah.id');
+        return $q->where(function (Builder $b) use ($kelola, $peserta): void {
+            $b->whereIn('materi.kelas_kuliah_id', $kelola)->orWhere(function (Builder $s) use ($peserta): void {
+                $s->whereIn('materi.kelas_kuliah_id', $peserta)->where('materi.status', Materi::TERBIT)
+                    ->whereNotNull('materi.terbit_at')->where('materi.terbit_at', '<=', now('UTC'))
+                    ->where(function (Builder $p): void {
+                        $p->whereNull('materi.pertemuan_id')->orWhereHas('pertemuan', fn(Builder $r) => $r->where('status', '!=', 'batal'));
+                    });
+            });
+        });
+    }
+    public function lihat(User $user, Materi $materi): bool
+    {
+        return $this->batasi(Materi::query(), $user)->whereKey($materi->id)->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Services\AksesKegiatan.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\Kegiatan;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+
+class AksesKegiatan
+{
+    public function __construct(private readonly AksesMateri $akademik) {}
+    public function masuk(User $u): bool
+    {
+        return $this->akademik->masuk($u);
+    }
+    public function pengelola(User $u): bool
+    {
+        return $this->akademik->pengelola($u);
+    }
+    public function kelasKelola(User $u): Builder
+    {
+        return $this->akademik->kelasKelola($u);
+    }
+    public function kelola(User $u, int $id): bool
+    {
+        return $this->akademik->kelola($u, $id);
+    }
+    public function konteksTulis(int $id): bool
+    {
+        return $this->akademik->konteksTulis($id);
+    }
+    public function batasi(Builder $q, User $u): Builder
+    {
+        $kelola = $this->akademik->kelasKelola($u)->select('kelas_kuliah.id');
+        $peserta = $this->akademik->kelasPeserta($u)->select('kelas_kuliah.id');
+        return $q->where(function (Builder $b) use ($kelola, $peserta): void {
+            $b->whereIn('kegiatan.kelas_kuliah_id', $kelola)->orWhere(function (Builder $s) use ($peserta): void {
+                $s->whereIn('kegiatan.kelas_kuliah_id', $peserta)->whereIn('kegiatan.status', [Kegiatan::TERBIT, Kegiatan::DITUTUP])
+                    ->whereNotNull('kegiatan.terbit_at')->where('kegiatan.terbit_at', '<=', now('UTC'))
+                    ->where(fn(Builder $p) => $p->whereNull('kegiatan.pertemuan_id')
+                        ->orWhereHas('pertemuan', fn(Builder $r) => $r->where('status', '!=', 'batal')));
+            });
+        });
+    }
+    public function lihat(User $u, Kegiatan $k): bool
+    {
+        return $this->batasi(Kegiatan::query(), $u)->whereKey($k->id)->exists();
+    }
+    public function bacaIsi(User $u, Kegiatan $k): bool
+    {
+        if ($this->kelola($u, $k->kelas_kuliah_id)) {
+            return true;
+        }
+        return $this->batasi(Kegiatan::query(), $u)->whereKey($k->id)->where('buka_at', '<=', now('UTC'))->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Services\AksesPengumpulan.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\Kegiatan;
+use App\Models\KelasKuliah;
+use App\Models\Pengumpulan;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\DB;
+
+class AksesPengumpulan
+{
+    public function __construct(private readonly AksesMateri $akademik, private readonly AksesKegiatan $kegiatan) {}
+    public function masuk(User $u): bool
+    {
+        return $this->akademik->masuk($u);
+    }
+    public function mahasiswa(User $u): bool
+    {
+        return $this->akademik->mahasiswa($u);
+    }
+    public function kelola(User $u, Kegiatan $k): bool
+    {
+        return $this->akademik->kelola($u, $k->kelas_kuliah_id);
+    }
+    public function peserta(int $kelasId): QueryBuilder
+    {
+        return DB::table('detail_krs as d')->join('krs as k', 'k.id', '=', 'd.krs_id')
+            ->join('registrasi_semester as r', 'r.id', '=', 'k.registrasi_semester_id')
+            ->join('riwayat_studi as h', 'h.id', '=', 'r.riwayat_studi_id')
+            ->join('mahasiswa as m', 'm.id', '=', 'h.mahasiswa_id')->join('users as u', 'u.id', '=', 'm.user_id')
+            ->join('kelas_kuliah as c', 'c.id', '=', 'd.kelas_kuliah_id')->join('rombel as b', 'b.id', '=', 'c.rombel_id')
+            ->where('d.kelas_kuliah_id', $kelasId)->where('d.status', 'aktif')->where('k.status', 'disahkan')
+            ->where('r.status', 'aktif')->where('h.status', 'aktif')->where('u.status', 'aktif')
+            ->whereColumn('r.rombel_id', 'b.id')->whereColumn('r.periode_akademik_id', 'b.periode_akademik_id')
+            ->whereExists(function (QueryBuilder $q): void {
+                $q->selectRaw('1')->from('user_roles as ur')->join('roles as ro', 'ro.id', '=', 'ur.role_id')
+                    ->whereColumn('ur.user_id', 'u.id')->where('ro.kode', 'mahasiswa');
+            });
+    }
+    public function detail(User $u, Kegiatan $k): ?int
+    {
+        if (! $this->mahasiswa($u)) {
+            return null;
+        }
+        $ids = $this->peserta($k->kelas_kuliah_id)->where('u.id', $u->id)->orderBy('d.id')->limit(2)->pluck('d.id');
+        return $ids->count() === 1 ? (int) $ids->first() : null;
+    }
+    public function ruangSaya(User $u, Kegiatan $k): bool
+    {
+        if (! $this->mahasiswa($u)) {
+            return false;
+        }
+        return Pengumpulan::query()->where('pemilik_id', $u->id)->where('kegiatan_id', $k->id)->exists()
+            || ($this->detail($u, $k) !== null && $this->kegiatan->lihat($u, $k));
+    }
+    public function bolehTulis(User $u, Kegiatan $k): bool
+    {
+        $k = Kegiatan::query()->find($k->id);
+        if (! $k || ! $k->jendelaTerbuka() || $this->detail($u, $k) === null || ! $this->kegiatan->bacaIsi($u, $k)) {
+            return false;
+        }
+        if ($k->pertemuan_id !== null && ! $k->pertemuan()->where('status', '!=', 'batal')->exists()) {
+            return false;
+        }
+        return KelasKuliah::query()->whereKey($k->kelas_kuliah_id)->where('status', 'aktif')
+            ->whereHas('rombel.periodeAkademik', fn(Builder $q) => $q->where('status', 'aktif'))->exists();
+    }
+    public function batasi(Builder $q, User $u): Builder
+    {
+        $pemilik = $this->mahasiswa($u);
+        $kelas = $this->akademik->kelasKelola($u)->select('kelas_kuliah.id');
+        return $q->where(function (Builder $s) use ($u, $pemilik, $kelas): void {
+            $s->where(function (Builder $own) use ($u, $pemilik): void {
+                $own->where('pengumpulan.pemilik_id', $u->id);
+                if (! $pemilik) {
+                    $own->whereRaw('1 = 0');
+                }
+            })->orWhere(function (Builder $staff) use ($kelas): void {
+                $staff->where('pengumpulan.status', Pengumpulan::DIKIRIM)
+                    ->whereHas('kegiatan', fn(Builder $k) => $k->whereIn('kelas_kuliah_id', $kelas));
+            });
+        });
+    }
+    public function lihat(User $u, Pengumpulan $p): bool
+    {
+        return $this->batasi(Pengumpulan::query(), $u)->whereKey($p->id)->exists();
+    }
+    public function pemilik(User $u, Pengumpulan $p): bool
+    {
+        return $this->mahasiswa($u) && Pengumpulan::query()->whereKey($p->id)->where('pemilik_id', $u->id)->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\BerkasPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\Berkas;
+use App\Models\User;
+use App\Services\AksesBerkas;
+
+class BerkasPolicy
+{
+    public function viewAny(User $user): bool
+    {
+        return app(AksesBerkas::class)->masuk($user);
+    }
+    public function create(User $user): bool
+    {
+        return $this->viewAny($user);
+    }
+    public function view(User $user, Berkas $file): bool
+    {
+        return $this->viewAny($user) && $file->diunggah_oleh === $user->id;
+    }
+    public function update(User $user, Berkas $file): bool
+    {
+        return $this->view($user, $file) && $file->status === Berkas::TERSEDIA;
+    }
+    public function download(User $user, Berkas $file): bool
+    {
+        return $this->update($user, $file);
+    }
+    public function nonaktifkan(User $user, Berkas $file): bool
+    {
+        return $this->update($user, $file);
+    }
+    public function pulihkan(User $user, Berkas $file): bool
+    {
+        return $this->view($user, $file) && $file->status === Berkas::DIHAPUS;
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\MateriPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\KelasKuliah;
+use App\Models\Materi;
+use App\Models\User;
+use App\Services\AksesMateri;
+
+class MateriPolicy
+{
+    public function __construct(private readonly AksesMateri $akses) {}
+    public function viewAny(User $user): bool
+    {
+        return $this->akses->masuk($user);
+    }
+    public function create(User $user, KelasKuliah $kelas): bool
+    {
+        return $this->akses->kelola($user, $kelas->id) && $this->akses->konteksTulis($kelas->id);
+    }
+    public function view(User $user, Materi $m): bool
+    {
+        return $this->akses->lihat($user, $m);
+    }
+    public function manage(User $user, Materi $m): bool
+    {
+        return $this->akses->kelola($user, $m->kelas_kuliah_id);
+    }
+    public function update(User $user, Materi $m): bool
+    {
+        return $m->status === Materi::DRAF && $this->manage($user, $m) && $this->akses->konteksTulis($m->kelas_kuliah_id);
+    }
+    public function terbitkan(User $user, Materi $m): bool
+    {
+        return $this->update($user, $m)
+            && KelasKuliah::query()->whereKey($m->kelas_kuliah_id)->where('status', 'aktif')->exists();
+    }
+    public function tarik(User $user, Materi $m): bool
+    {
+        return $m->status === Materi::TERBIT && $this->manage($user, $m) && $this->akses->konteksTulis($m->kelas_kuliah_id);
+    }
+    public function arsipkan(User $user, Materi $m): bool
+    {
+        // Penarikan akses melalui arsip tetap boleh setelah periode selesai.
+        return $m->status !== Materi::ARSIP && $this->manage($user, $m);
+    }
+    public function pulihkan(User $user, Materi $m): bool
+    {
+        return $m->status === Materi::ARSIP && $this->manage($user, $m) && $this->akses->konteksTulis($m->kelas_kuliah_id);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\KegiatanPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\Kegiatan;
+use App\Models\KelasKuliah;
+use App\Models\User;
+use App\Services\AksesKegiatan;
+
+class KegiatanPolicy
+{
+    public function __construct(private readonly AksesKegiatan $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->masuk($u);
+    }
+    public function create(User $u, KelasKuliah $kelas): bool
+    {
+        return $this->akses->kelola($u, $kelas->id) && $this->akses->konteksTulis($kelas->id);
+    }
+    public function view(User $u, Kegiatan $k): bool
+    {
+        return $this->akses->lihat($u, $k);
+    }
+    public function bacaIsi(User $u, Kegiatan $k): bool
+    {
+        return $this->akses->bacaIsi($u, $k);
+    }
+    public function manage(User $u, Kegiatan $k): bool
+    {
+        return $this->akses->kelola($u, $k->kelas_kuliah_id);
+    }
+    public function update(User $u, Kegiatan $k): bool
+    {
+        return $k->status === Kegiatan::DRAF && $k->terbit_at === null && $this->manage($u, $k) && $this->akses->konteksTulis($k->kelas_kuliah_id);
+    }
+    private function aktif(User $u, Kegiatan $k): bool
+    {
+        return $this->manage($u, $k) && $this->akses->konteksTulis($k->kelas_kuliah_id)
+            && KelasKuliah::query()->whereKey($k->kelas_kuliah_id)->where('status', 'aktif')->exists();
+    }
+    public function terbitkan(User $u, Kegiatan $k): bool
+    {
+        return $this->update($u, $k) && $this->aktif($u, $k);
+    }
+    public function tutup(User $u, Kegiatan $k): bool
+    {
+        return $k->status === Kegiatan::TERBIT && $this->manage($u, $k);
+    }
+    public function bukaKembali(User $u, Kegiatan $k): bool
+    {
+        return $k->status === Kegiatan::DITUTUP && $this->aktif($u, $k);
+    }
+    public function perpanjang(User $u, Kegiatan $k): bool
+    {
+        return in_array($k->status, [Kegiatan::TERBIT, Kegiatan::DITUTUP], true) && $this->aktif($u, $k);
+    }
+    public function arsipkan(User $u, Kegiatan $k): bool
+    {
+        return $k->status !== Kegiatan::ARSIP && $this->manage($u, $k);
+    }
+    public function pulihkan(User $u, Kegiatan $k): bool
+    {
+        return $k->status === Kegiatan::ARSIP && $this->manage($u, $k) && $this->akses->konteksTulis($k->kelas_kuliah_id);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\PengumpulanPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\Kegiatan;
+use App\Models\Pengumpulan;
+use App\Models\User;
+use App\Services\AksesPengumpulan;
+
+class PengumpulanPolicy
+{
+    public function __construct(private readonly AksesPengumpulan $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->masuk($u);
+    }
+    public function view(User $u, Pengumpulan $p): bool
+    {
+        return $this->akses->lihat($u, $p);
+    }
+    public function ruangSaya(User $u, Kegiatan $k): bool
+    {
+        return $this->akses->ruangSaya($u, $k);
+    }
+    public function rekap(User $u, Kegiatan $k): bool
+    {
+        return $this->akses->kelola($u, $k);
+    }
+    public function create(User $u, Kegiatan $k): bool
+    {
+        return $this->akses->bolehTulis($u, $k);
+    }
+    public function update(User $u, Pengumpulan $p): bool
+    {
+        return $this->akses->pemilik($u, $p) && $p->status === Pengumpulan::DRAF && $this->akses->bolehTulis($u, $p->kegiatan);
+    }
+    // Mengizinkan pengulangan POST untuk menerima bukti kiriman yang sama. Aksi mengecek waktu secara atomik.
+    public function kirim(User $u, Pengumpulan $p): bool
+    {
+        return $this->akses->pemilik($u, $p);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\BerkasController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaBerkas;
+use App\Http\Requests\BerkasRequest;
+use App\Models\Berkas;
+use App\Services\PenyimpananBerkas;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class BerkasController extends Controller
+{
+    public function index(Request $request): View
+    {
+        Gate::authorize('viewAny', Berkas::class);
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'status' => ['nullable', 'string', Rule::in(array_keys(Berkas::STATUS))],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $query = Berkas::query()->where('diunggah_oleh', $request->user()->id);
+        if (! empty($filter['q'])) {
+            $query->where('label', 'like', '%' . $filter['q'] . '%');
+        }
+        if (! empty($filter['status'])) {
+            $query->where('status', $filter['status']);
+        }
+        return view('berkas.index', [
+            'daftar' => $query->orderByDesc('id')->paginate(20)->withQueryString(),
+            'filter' => $filter,
+            'terpakai' => (int) Berkas::query()->where('diunggah_oleh', $request->user()->id)->sum('ukuran_byte'),
+            'kuota' => (int) config('berkas.kuota_byte'),
+        ]);
+    }
+    public function create(): View
+    {
+        Gate::authorize('create', Berkas::class);
+        return view('berkas.create', ['token' => (string) Str::uuid()]);
+    }
+    public function store(BerkasRequest $request, KelolaBerkas $aksi): RedirectResponse
+    {
+        $file = $aksi->unggah($request->user()->id, $request->file('file'), $request->validated());
+        return redirect()->route('berkas.show', $file)->with('info', 'Status unggahan: ' . $file->labelStatus() . '.');
+    }
+    public function show(Berkas $berkas): View
+    {
+        Gate::authorize('view', $berkas);
+        return view('berkas.show', [
+            'file' => $berkas,
+            'audit' => $berkas->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(15),
+            'zona' => (string) config('siakad.timezone', 'Asia/Makassar')
+        ]);
+    }
+    public function edit(Berkas $berkas): View
+    {
+        Gate::authorize('update', $berkas);
+        return view('berkas.edit', ['file' => $berkas]);
+    }
+    public function update(BerkasRequest $request, Berkas $berkas, KelolaBerkas $aksi): RedirectResponse
+    {
+        $file = $aksi->ubah('ubah', $request->user()->id, $berkas, $request->validated());
+        return redirect()->route('berkas.show', $file)->with('info', 'Keterangan berkas tersimpan.');
+    }
+    public function nonaktifkan(BerkasRequest $request, Berkas $berkas, KelolaBerkas $aksi): RedirectResponse
+    {
+        $file = $aksi->ubah('nonaktifkan', $request->user()->id, $berkas, $request->validated());
+        return redirect()->route('berkas.show', $file)->with('info', 'Berkas dinonaktifkan. Riwayat tetap disimpan.');
+    }
+    public function pulihkan(BerkasRequest $request, Berkas $berkas, KelolaBerkas $aksi): RedirectResponse
+    {
+        $file = $aksi->ubah('pulihkan', $request->user()->id, $berkas, $request->validated());
+        return redirect()->route('berkas.show', $file)->with('info', 'Berkas dipulihkan.');
+    }
+    public function tautan(Request $request, Berkas $berkas): RedirectResponse
+    {
+        Gate::authorize('download', $berkas);
+        return redirect()->to(URL::temporarySignedRoute(
+            'berkas.unduh',
+            now()->addMinutes((int) config('berkas.masa_tautan_menit')),
+            [
+                'berkas' => $berkas->id,
+                'pemohon' => $request->user()->id,
+                'versi' => $berkas->revisi,
+            ]
+        ));
+    }
+    public function unduh(Request $request, Berkas $berkas, PenyimpananBerkas $storage): StreamedResponse
+    {
+        // Middleware signed memeriksa tanda tangan DAN masa berlaku URL.
+        Gate::authorize('download', $berkas);
+        abort_unless($request->query('pemohon') === (string) $request->user()->id
+            && $request->query('versi') === (string) $berkas->revisi, 403, 'Tautan sudah tidak sesuai. Klik Unduh kembali.');
+        try {
+            $stream = $storage->buka($berkas);
+        } catch (\Throwable $error) {
+            Log::warning('Pembacaan objek berkas gagal.', ['berkas_id' => $berkas->id, 'jenis' => $error::class]);
+            abort(503, 'Berkas belum dapat diunduh. Coba lagi atau hubungi pengelola.');
+        }
+        $nama = Str::slug(mb_substr($berkas->label, 0, 100)) ?: 'berkas-' . $berkas->id;
+        return response()->streamDownload(function () use ($stream): void {
+            try {
+                fpassthru($stream);
+            } finally {
+                fclose($stream);
+            }
+        }, $nama . '.' . $berkas->ekstensi, [
+            'Content-Type' => 'application/octet-stream',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
+            'Content-Length' => (string) $berkas->ukuran_byte,
+        ]);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\MateriController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaMateri;
+use App\Http\Requests\MateriRequest;
+use App\Http\Requests\MateriStatusRequest;
+use App\Models\Berkas;
+use App\Models\KelasKuliah;
+use App\Models\Materi;
+use App\Models\MateriBerkas;
+use App\Models\Pertemuan;
+use App\Services\AksesMateri;
+use App\Services\PenyimpananBerkas;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class MateriController extends Controller
+{
+    public function index(Request $request, AksesMateri $akses): View
+    {
+        Gate::authorize('viewAny', Materi::class);
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'kelas' => ['nullable', 'integer', 'min:1'],
+            'status' => ['nullable', 'string', Rule::in(array_keys(Materi::STATUS))],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $q = $akses->batasi(Materi::query(), $request->user())->with('kelasKuliah');
+        if (! empty($filter['q'])) {
+            $q->where('judul', 'like', '%' . $filter['q'] . '%');
+        }
+        if (! empty($filter['kelas'])) {
+            $q->where('kelas_kuliah_id', $filter['kelas']);
+        }
+        if (! empty($filter['status'])) {
+            $q->where('status', $filter['status']);
+        }
+        return view('materi.index', [
+            'daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(),
+            'filter' => $filter,
+            'pengelola' => $akses->pengelola($request->user())
+        ]);
+    }
+    public function kelas(Request $request, AksesMateri $akses): View
+    {
+        abort_unless($akses->pengelola($request->user()), 403);
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $q = $akses->kelasKelola($request->user());
+        if (! empty($filter['q'])) {
+            $q->where(fn($b) => $b->where('kode', 'like', '%' . $filter['q'] . '%')->orWhere('nama_mk_snapshot', 'like', '%' . $filter['q'] . '%'));
+        }
+        return view('materi.kelas', ['daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(), 'filter' => $filter]);
+    }
+    public function create(Request $request): View
+    {
+        $data = $request->validate(['kelas' => ['required', 'integer', 'min:1']]);
+        $kelas = KelasKuliah::query()->findOrFail($data['kelas']);
+        Gate::authorize('create', [Materi::class, $kelas]);
+        return view('materi.create', $this->form($kelas) + ['materi' => new Materi(), 'token' => (string) Str::uuid()]);
+    }
+    public function store(MateriRequest $request, KelolaMateri $aksi): RedirectResponse
+    {
+        $m = $aksi->buat($request->user()->id, $request->validated());
+        return redirect()->route('materi.show', $m)->with('info', 'Draf materi tersimpan. Periksa isinya sebelum diterbitkan.');
+    }
+    public function show(Materi $materi): View
+    {
+        Gate::authorize('view', $materi);
+        $materi->load(['kelasKuliah', 'pertemuan', 'pembuat', 'lampiran.berkas']);
+        return view('materi.show', [
+            'materi' => $materi,
+            'audit' => Gate::allows('manage', $materi) ? $materi->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(10) : null,
+            'zona' => (string) config('siakad.timezone', 'Asia/Makassar')
+        ]);
+    }
+    public function edit(Materi $materi): View
+    {
+        Gate::authorize('update', $materi);
+        $materi->load(['kelasKuliah', 'lampiran.berkas']);
+        return view('materi.edit', $this->form($materi->kelasKuliah) + ['materi' => $materi]);
+    }
+    public function update(MateriRequest $request, Materi $materi, KelolaMateri $aksi): RedirectResponse
+    {
+        $m = $aksi->ubah($request->user()->id, $materi, $request->validated());
+        return redirect()->route('materi.show', $m)->with('info', 'Draf dan daftar lampiran diperbarui.');
+    }
+    public function terbitkan(MateriStatusRequest $r, Materi $materi, KelolaMateri $a): RedirectResponse
+    {
+        return $this->status('terbitkan', $r, $materi, $a);
+    }
+    public function tarik(MateriStatusRequest $r, Materi $materi, KelolaMateri $a): RedirectResponse
+    {
+        return $this->status('tarik', $r, $materi, $a);
+    }
+    public function arsipkan(MateriStatusRequest $r, Materi $materi, KelolaMateri $a): RedirectResponse
+    {
+        return $this->status('arsipkan', $r, $materi, $a);
+    }
+    public function pulihkan(MateriStatusRequest $r, Materi $materi, KelolaMateri $a): RedirectResponse
+    {
+        return $this->status('pulihkan', $r, $materi, $a);
+    }
+
+    public function tautan(Request $request, Materi $materi, MateriBerkas $lampiran): RedirectResponse
+    {
+        $b = $this->lampiran($materi, $lampiran);
+        return redirect()->to(URL::temporarySignedRoute('materi.unduh', now()->addMinutes((int) config('materi.masa_tautan_menit', 2)), [
+            'materi' => $materi->id,
+            'lampiran' => $lampiran->id,
+            'pemohon' => $request->user()->id,
+            'versi_materi' => $materi->revisi,
+            'versi_berkas' => $b->revisi,
+        ]));
+    }
+    public function unduh(Request $request, Materi $materi, MateriBerkas $lampiran, PenyimpananBerkas $storage): StreamedResponse
+    {
+        $b = $this->lampiran($materi, $lampiran);
+        $this->tokenUnduh($request, $materi, $b);
+        try {
+            $stream = $storage->buka($b);
+        } catch (\Throwable $e) {
+            Log::warning('Unduh lampiran materi gagal.', ['materi_id' => $materi->id, 'berkas_id' => $b->id, 'jenis' => $e::class]);
+            abort(503, 'Lampiran belum dapat diunduh. Coba lagi atau hubungi pengelola.');
+        }
+        // Jangan menahan transaksi database saat membaca cloud. Periksa akses lagi setelah pembacaan.
+        try {
+            $materi->refresh();
+            $lampiran->refresh();
+            $b = $this->lampiran($materi, $lampiran);
+            $this->tokenUnduh($request, $materi, $b);
+        } catch (\Throwable $e) {
+            fclose($stream);
+            throw $e;
+        }
+        $nama = Str::slug(mb_substr($b->label, 0, 100)) ?: 'lampiran-' . $b->id;
+        return response()->streamDownload(function () use ($stream): void {
+            try {
+                fpassthru($stream);
+            } finally {
+                fclose($stream);
+            }
+        }, $nama . '.' . $b->ekstensi, [
+            'Content-Type' => 'application/octet-stream',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
+            'Content-Length' => (string) $b->ukuran_byte
+        ]);
+    }
+
+    private function lampiran(Materi $m, MateriBerkas $p): Berkas
+    {
+        Gate::authorize('view', $m);
+        abort_unless($p->materi_id === $m->id && $p->aktif, 404);
+        $file = Berkas::query()->findOrFail($p->berkas_id);
+        abort_unless($file->status === Berkas::TERSEDIA, 404);
+        return $file;
+    }
+    private function tokenUnduh(Request $r, Materi $m, Berkas $b): void
+    {
+        abort_unless($r->query('pemohon') === (string) $r->user()->id
+            && $r->query('versi_materi') === (string) $m->revisi
+            && $r->query('versi_berkas') === (string) $b->revisi, 403, 'Tautan berubah. Klik Unduh kembali.');
+    }
+    private function form(KelasKuliah $kelas): array
+    {
+        return [
+            'kelas' => $kelas,
+            'pertemuan' => Pertemuan::query()->where('kelas_kuliah_id', $kelas->id)->where('status', '!=', 'batal')->orderBy('nomor')->get(),
+            'hostTautan' => config('materi.host_tautan', [])
+        ];
+    }
+    private function status(string $aksi, MateriStatusRequest $r, Materi $m, KelolaMateri $a): RedirectResponse
+    {
+        $m = $a->status($aksi, $r->user()->id, $m, $r->validated());
+        return redirect()->route('materi.show', $m)->with('info', 'Status materi: ' . Materi::STATUS[$m->status] . '.');
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\KegiatanController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaKegiatan;
+use App\Http\Requests\KegiatanRequest;
+use App\Http\Requests\KegiatanStatusRequest;
+use App\Models\Berkas;
+use App\Models\KelasKuliah;
+use App\Models\Kegiatan;
+use App\Models\KegiatanBerkas;
+use App\Models\Pertemuan;
+use App\Services\AksesKegiatan;
+use App\Services\PenyimpananBerkas;
+use App\Services\WaktuKegiatan;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class KegiatanController extends Controller
+{
+    public function index(Request $request, AksesKegiatan $akses): View
+    {
+        Gate::authorize('viewAny', Kegiatan::class);
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'kelas' => ['nullable', 'integer', 'min:1'],
+            'jenis' => ['nullable', 'string', Rule::in(array_keys(Kegiatan::JENIS))],
+            'status' => ['nullable', 'string', Rule::in(array_keys(Kegiatan::STATUS))],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $q = $akses->batasi(Kegiatan::query(), $request->user())->with('kelasKuliah')
+            ->select(['kegiatan.id', 'kelas_kuliah_id', 'judul', 'jenis', 'status', 'buka_at', 'tenggat_at', 'terbit_at']);
+        if (! empty($filter['q'])) {
+            $q->where('judul', 'like', '%' . $filter['q'] . '%');
+        }
+        if (! empty($filter['kelas'])) {
+            $q->where('kelas_kuliah_id', $filter['kelas']);
+        }
+        if (! empty($filter['status'])) {
+            $q->where('status', $filter['status']);
+        }
+        if (! empty($filter['jenis'])) {
+            $q->where('jenis', $filter['jenis']);
+        }
+        return view('kegiatan.index', [
+            'daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(),
+            'filter' => $filter,
+            'pengelola' => $akses->pengelola($request->user()),
+            'zona' => WaktuKegiatan::zona()
+        ]);
+    }
+    public function kelas(Request $request, AksesKegiatan $akses): View
+    {
+        abort_unless($akses->pengelola($request->user()), 403);
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $q = $akses->kelasKelola($request->user());
+        if (! empty($filter['q'])) {
+            $q->where(fn($b) => $b->where('kode', 'like', '%' . $filter['q'] . '%')->orWhere('nama_mk_snapshot', 'like', '%' . $filter['q'] . '%'));
+        }
+        return view('kegiatan.kelas', ['daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(), 'filter' => $filter]);
+    }
+    public function create(Request $request): View
+    {
+        $data = $request->validate(['kelas' => ['required', 'integer', 'min:1']]);
+        $kelas = KelasKuliah::query()->findOrFail($data['kelas']);
+        Gate::authorize('create', [Kegiatan::class, $kelas]);
+        return view('kegiatan.create', $this->form($kelas) + ['kegiatan' => new Kegiatan(), 'token' => (string) Str::uuid()]);
+    }
+    public function store(KegiatanRequest $request, KelolaKegiatan $aksi): RedirectResponse
+    {
+        $m = $aksi->buat($request->user()->id, $request->validated());
+        return redirect()->route('kegiatan.show', $m)->with('info', 'Draf kegiatan tersimpan. Periksa isinya sebelum diterbitkan.');
+    }
+    public function show(Request $request, Kegiatan $kegiatan): View
+    {
+        Gate::authorize('view', $kegiatan);
+        $request->validate(['page' => ['nullable', 'integer', 'min:1', 'max:100000']]);
+        $bacaIsi = Gate::allows('bacaIsi', $kegiatan);
+        $kegiatan->load(['kelasKuliah', 'pertemuan', 'pembuat']);
+        if ($bacaIsi) {
+            $kegiatan->load('lampiran.berkas');
+        }
+        return view('kegiatan.show', [
+            'kegiatan' => $kegiatan,
+            'audit' => Gate::allows('manage', $kegiatan) ? $kegiatan->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(10) : null,
+            'zona' => WaktuKegiatan::zona(),
+            'bacaIsi' => $bacaIsi
+        ]);
+    }
+    public function edit(Kegiatan $kegiatan): View
+    {
+        Gate::authorize('update', $kegiatan);
+        $kegiatan->load(['kelasKuliah', 'lampiran.berkas']);
+        return view('kegiatan.edit', $this->form($kegiatan->kelasKuliah) + ['kegiatan' => $kegiatan]);
+    }
+    public function update(KegiatanRequest $request, Kegiatan $kegiatan, KelolaKegiatan $aksi): RedirectResponse
+    {
+        $m = $aksi->ubah($request->user()->id, $kegiatan, $request->validated());
+        return redirect()->route('kegiatan.show', $m)->with('info', 'Draf dan daftar lampiran diperbarui.');
+    }
+    public function terbitkan(KegiatanStatusRequest $r, Kegiatan $kegiatan, KelolaKegiatan $a): RedirectResponse
+    {
+        return $this->status('terbitkan', $r, $kegiatan, $a);
+    }
+    public function tutup(KegiatanStatusRequest $r, Kegiatan $kegiatan, KelolaKegiatan $a): RedirectResponse
+    {
+        return $this->status('tutup', $r, $kegiatan, $a);
+    }
+    public function bukaKembali(KegiatanStatusRequest $r, Kegiatan $kegiatan, KelolaKegiatan $a): RedirectResponse
+    {
+        return $this->status('bukaKembali', $r, $kegiatan, $a);
+    }
+    public function perpanjang(KegiatanStatusRequest $r, Kegiatan $kegiatan, KelolaKegiatan $a): RedirectResponse
+    {
+        return $this->status('perpanjang', $r, $kegiatan, $a);
+    }
+    public function arsipkan(KegiatanStatusRequest $r, Kegiatan $kegiatan, KelolaKegiatan $a): RedirectResponse
+    {
+        return $this->status('arsipkan', $r, $kegiatan, $a);
+    }
+    public function pulihkan(KegiatanStatusRequest $r, Kegiatan $kegiatan, KelolaKegiatan $a): RedirectResponse
+    {
+        return $this->status('pulihkan', $r, $kegiatan, $a);
+    }
+
+    public function tautan(Request $request, Kegiatan $kegiatan, KegiatanBerkas $lampiran): RedirectResponse
+    {
+        $b = $this->lampiran($kegiatan, $lampiran);
+        return redirect()->to(URL::temporarySignedRoute('kegiatan.unduh', now()->addMinutes((int) config('kegiatan.masa_tautan_menit', 2)), [
+            'kegiatan' => $kegiatan->id,
+            'lampiran' => $lampiran->id,
+            'pemohon' => $request->user()->id,
+            'versi_kegiatan' => $kegiatan->revisi,
+            'versi_berkas' => $b->revisi,
+        ]));
+    }
+    public function unduh(Request $request, Kegiatan $kegiatan, KegiatanBerkas $lampiran, PenyimpananBerkas $storage): StreamedResponse
+    {
+        $b = $this->lampiran($kegiatan, $lampiran);
+        $this->tokenUnduh($request, $kegiatan, $b);
+        try {
+            $stream = $storage->buka($b);
+        } catch (\Throwable $e) {
+            Log::warning('Unduh lampiran kegiatan gagal.', ['kegiatan_id' => $kegiatan->id, 'berkas_id' => $b->id, 'jenis' => $e::class]);
+            abort(503, 'Lampiran belum dapat diunduh. Coba lagi atau hubungi pengelola.');
+        }
+        // Jangan menahan transaksi database saat membaca cloud. Periksa akses lagi setelah pembacaan.
+        try {
+            $kegiatan->refresh();
+            $lampiran->refresh();
+            $b = $this->lampiran($kegiatan, $lampiran);
+            $this->tokenUnduh($request, $kegiatan, $b);
+        } catch (\Throwable $e) {
+            fclose($stream);
+            throw $e;
+        }
+        $nama = Str::slug(mb_substr($b->label, 0, 100)) ?: 'lampiran-' . $b->id;
+        return response()->streamDownload(function () use ($stream): void {
+            try {
+                fpassthru($stream);
+            } finally {
+                fclose($stream);
+            }
+        }, $nama . '.' . $b->ekstensi, [
+            'Content-Type' => 'application/octet-stream',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
+            'Content-Length' => (string) $b->ukuran_byte
+        ]);
+    }
+
+    private function lampiran(Kegiatan $m, KegiatanBerkas $p): Berkas
+    {
+        Gate::authorize('bacaIsi', $m);
+        abort_unless($p->kegiatan_id === $m->id && $p->aktif, 404);
+        $file = Berkas::query()->findOrFail($p->berkas_id);
+        abort_unless($file->status === Berkas::TERSEDIA, 404);
+        return $file;
+    }
+    private function tokenUnduh(Request $r, Kegiatan $m, Berkas $b): void
+    {
+        abort_unless($r->query('pemohon') === (string) $r->user()->id
+            && $r->query('versi_kegiatan') === (string) $m->revisi
+            && $r->query('versi_berkas') === (string) $b->revisi, 403, 'Tautan berubah. Klik Unduh kembali.');
+    }
+    private function form(KelasKuliah $kelas): array
+    {
+        return [
+            'kelas' => $kelas,
+            'pertemuan' => Pertemuan::query()->where('kelas_kuliah_id', $kelas->id)->where('status', '!=', 'batal')->orderBy('nomor')->get(),
+            'zona' => WaktuKegiatan::zona()
+        ];
+    }
+    private function status(string $aksi, KegiatanStatusRequest $r, Kegiatan $m, KelolaKegiatan $a): RedirectResponse
+    {
+        $m = $a->status($aksi, $r->user()->id, $m, $r->validated());
+        return redirect()->route('kegiatan.show', $m)->with('info', 'Status kegiatan: ' . Kegiatan::STATUS[$m->status] . '.');
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\PengumpulanController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaPengumpulan;
+use App\Http\Requests\PengumpulanDrafRequest;
+use App\Http\Requests\PengumpulanKirimRequest;
+use App\Http\Requests\PengumpulanRequest;
+use App\Models\Berkas;
+use App\Models\Kegiatan;
+use App\Models\Pengumpulan;
+use App\Models\PengumpulanBerkas;
+use App\Services\AksesPengumpulan;
+use App\Services\PenyimpananBerkas;
+use App\Services\WaktuKegiatan;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class PengumpulanController extends Controller
+{
+    public function index(Request $r, AksesPengumpulan $akses): View
+    {
+        Gate::authorize('viewAny', Pengumpulan::class);
+        $filter = $r->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'kegiatan' => ['nullable', 'integer', 'min:1'],
+            'status' => ['nullable', Rule::in(['draf', 'dikirim', 'berlaku'])],
+            'page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $q = $akses->batasi(Pengumpulan::query(), $r->user())->select([
+            'pengumpulan.id',
+            'kegiatan_id',
+            'detail_krs_id',
+            'pemilik_id',
+            'versi',
+            'status',
+            'dikirim_at',
+            'updated_at'
+        ])->with(['pemilik:id,nama', 'kegiatan:id,kelas_kuliah_id,judul', 'kegiatan.kelasKuliah']);
+        if (! empty($filter['q'])) {
+            $q->whereHas('kegiatan', fn($k) => $k->where('judul', 'like', '%' . $filter['q'] . '%'));
+        }
+        if (! empty($filter['kegiatan'])) {
+            $q->where('kegiatan_id', $filter['kegiatan']);
+        }
+        if (($filter['status'] ?? null) === 'berlaku') {
+            $q->berlaku();
+        } elseif (! empty($filter['status'])) {
+            $q->where('pengumpulan.status', $filter['status']);
+        }
+        $daftar = $q->orderByDesc('id')->paginate(20)->withQueryString();
+        return view('pengumpulan.index', [
+            'daftar' => $daftar,
+            'filter' => $filter,
+            'zona' => WaktuKegiatan::zona(),
+            'berlakuIds' => Pengumpulan::query()->berlaku()->whereKey($daftar->getCollection()->modelKeys())->pluck('id')->map(fn($id) => (int) $id)->all()
+        ]);
+    }
+    public function saya(Request $r, Kegiatan $kegiatan, AksesPengumpulan $akses): View
+    {
+        Gate::authorize('ruangSaya', [Pengumpulan::class, $kegiatan]);
+        $r->validate(['page' => ['nullable', 'integer', 'min:1', 'max:100000']]);
+        $kegiatan->load('kelasKuliah');
+        $detailId = $akses->detail($r->user(), $kegiatan);
+        $q = Pengumpulan::query()->where('kegiatan_id', $kegiatan->id)->where('pemilik_id', $r->user()->id);
+        $daftar = (clone $q)->select(['id', 'kegiatan_id', 'detail_krs_id', 'versi', 'status', 'dikirim_at', 'updated_at'])
+            ->orderByDesc('id')->paginate(15)->withQueryString();
+        return view('pengumpulan.saya', [
+            'kegiatan' => $kegiatan,
+            'daftar' => $daftar,
+            'berlaku' => (clone $q)->berlaku()->get(['id', 'versi', 'detail_krs_id', 'dikirim_at']),
+            'draf' => $detailId === null ? null : (clone $q)->where('detail_krs_id', $detailId)->where('status', Pengumpulan::DRAF)->first(),
+            'dasarVersi' => $detailId === null ? 0 : (int) (clone $q)->where('detail_krs_id', $detailId)->max('versi'),
+            'token' => (string) Str::uuid(),
+            'bolehTulis' => $akses->bolehTulis($r->user(), $kegiatan),
+            'zona' => WaktuKegiatan::zona()
+        ]);
+    }
+    public function rekap(Request $r, Kegiatan $kegiatan, AksesPengumpulan $akses): View
+    {
+        Gate::authorize('rekap', [Pengumpulan::class, $kegiatan]);
+        $filter = $r->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'status' => ['nullable', Rule::in(['sudah', 'belum'])],
+            'peserta_page' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'kiriman_page' => ['nullable', 'integer', 'min:1', 'max:100000']
+        ]);
+        $kegiatan->load('kelasKuliah');
+        $efektif = Pengumpulan::query()->berlaku()->where('kegiatan_id', $kegiatan->id)
+            ->select(['pengumpulan.id', 'detail_krs_id', 'versi', 'dikirim_at']);
+        $peserta = $akses->peserta($kegiatan->kelas_kuliah_id)->leftJoinSub($efektif, 'jawaban', fn($join) => $join->on('jawaban.detail_krs_id', '=', 'd.id'));
+        $total = (clone $peserta)->count('d.id');
+        $sudah = (clone $peserta)->whereNotNull('jawaban.id')->count('d.id');
+        if (! empty($filter['q'])) {
+            $peserta->where(fn($q) => $q->where('u.nama', 'like', '%' . $filter['q'] . '%')->orWhere('m.nim', 'like', '%' . $filter['q'] . '%'));
+        }
+        if (($filter['status'] ?? null) === 'sudah') {
+            $peserta->whereNotNull('jawaban.id');
+        }
+        if (($filter['status'] ?? null) === 'belum') {
+            $peserta->whereNull('jawaban.id');
+        }
+        // Riwayat ini hanya kiriman final; tetap ada ketika peserta kemudian nonaktif/KRS dicabut.
+        $historis = Pengumpulan::query()->where('kegiatan_id', $kegiatan->id)->where('status', Pengumpulan::DIKIRIM)
+            ->select(['id', 'kegiatan_id', 'detail_krs_id', 'pemilik_id', 'versi', 'dikirim_at'])->with('pemilik:id,nama');
+        return view('pengumpulan.rekap', [
+            'kegiatan' => $kegiatan,
+            'filter' => $filter,
+            'total' => $total,
+            'sudah' => $sudah,
+            'peserta' => $peserta->orderBy('m.nim')->orderBy('d.id')->paginate(
+                20,
+                ['d.id as detail_id', 'm.nim', 'u.nama', 'jawaban.id as pengumpulan_id', 'jawaban.versi', 'jawaban.dikirim_at'],
+                'peserta_page'
+            )->withQueryString(),
+            'historis' => $historis->orderByDesc('id')->paginate(20, ['*'], 'kiriman_page')->withQueryString(),
+            'zona' => WaktuKegiatan::zona()
+        ]);
+    }
+    public function store(PengumpulanDrafRequest $r, Kegiatan $kegiatan, KelolaPengumpulan $aksi): RedirectResponse
+    {
+        $p = $aksi->buat($r->user()->id, $kegiatan, $r->validated());
+        return redirect()->route('pengumpulan.show', $p)->with('info', 'Versi jawaban tersedia. Draf belum dianggap terkumpul.');
+    }
+    public function show(Request $r, Pengumpulan $pengumpulan, AksesPengumpulan $akses): View
+    {
+        Gate::authorize('view', $pengumpulan);
+        $r->validate(['page' => ['nullable', 'integer', 'min:1', 'max:100000']]);
+        $pengumpulan->load(['pemilik', 'kegiatan.kelasKuliah', 'lampiran.berkas']);
+        return view('pengumpulan.show', [
+            'pengumpulan' => $pengumpulan,
+            'berlaku' => Pengumpulan::query()->berlaku()->whereKey($pengumpulan->id)->exists(),
+            'pemilik' => $akses->pemilik($r->user(), $pengumpulan),
+            'bolehTulis' => $akses->pemilik($r->user(), $pengumpulan) && $pengumpulan->status === Pengumpulan::DRAF
+                && $akses->bolehTulis($r->user(), $pengumpulan->kegiatan),
+            'audit' => $pengumpulan->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(10),
+            'zona' => WaktuKegiatan::zona()
+        ]);
+    }
+    public function edit(Pengumpulan $pengumpulan): View
+    {
+        Gate::authorize('update', $pengumpulan);
+        $pengumpulan->load(['kegiatan.kelasKuliah', 'lampiran']);
+        return view('pengumpulan.edit', ['pengumpulan' => $pengumpulan, 'zona' => WaktuKegiatan::zona()]);
+    }
+    public function update(PengumpulanRequest $r, Pengumpulan $pengumpulan, KelolaPengumpulan $aksi): RedirectResponse
+    {
+        $p = $aksi->ubah($r->user()->id, $pengumpulan, $r->validated());
+        return redirect()->route('pengumpulan.show', $p)->with('info', 'Draf disimpan. Periksa jawaban, lalu tekan Kirim jawaban final.');
+    }
+    public function kirim(PengumpulanKirimRequest $r, Pengumpulan $pengumpulan, KelolaPengumpulan $aksi): RedirectResponse
+    {
+        $p = $aksi->kirim($r->user()->id, $pengumpulan, $r->validated());
+        return redirect()->route('pengumpulan.show', $p)->with('info', 'Jawaban versi ' . $p->versi . ' sudah tercatat sebagai kiriman final.');
+    }
+    public function tautan(Request $r, Pengumpulan $pengumpulan, PengumpulanBerkas $lampiran): RedirectResponse
+    {
+        $b = $this->lampiran($pengumpulan, $lampiran);
+        return redirect()->to(URL::temporarySignedRoute('pengumpulan.unduh', now()->addMinutes(max(1, min(5, (int) config('pengumpulan.masa_tautan_menit', 2)))), [
+            'pengumpulan' => $pengumpulan->id,
+            'lampiran' => $lampiran->id,
+            'pemohon' => $r->user()->id,
+            'versi_pengumpulan' => $pengumpulan->revisi,
+            'versi_berkas' => $b->revisi,
+        ]));
+    }
+    public function unduh(Request $r, Pengumpulan $pengumpulan, PengumpulanBerkas $lampiran, PenyimpananBerkas $storage): StreamedResponse
+    {
+        $b = $this->lampiran($pengumpulan, $lampiran);
+        $this->tokenUnduh($r, $pengumpulan, $b);
+        try {
+            $stream = $storage->buka($b);
+        } catch (\Throwable $e) {
+            Log::warning('Unduh jawaban gagal.', ['pengumpulan_id' => $pengumpulan->id, 'berkas_id' => $b->id, 'jenis' => $e::class]);
+            abort(503, 'Berkas belum dapat diunduh. Coba lagi atau hubungi pengelola.');
+        }
+        // Tidak menahan transaksi ketika membaca cloud. Otorisasi diperiksa lagi sebelum respons dikirim.
+        try {
+            $pengumpulan->refresh();
+            $lampiran->refresh();
+            $b = $this->lampiran($pengumpulan, $lampiran);
+            $this->tokenUnduh($r, $pengumpulan, $b);
+        } catch (\Throwable $e) {
+            fclose($stream);
+            throw $e;
+        }
+        $nama = Str::slug(mb_substr(pathinfo($lampiran->nama_asli, PATHINFO_FILENAME), 0, 100)) ?: 'jawaban-' . $lampiran->id;
+        return response()->streamDownload(function () use ($stream): void {
+            try {
+                fpassthru($stream);
+            } finally {
+                fclose($stream);
+            }
+        }, $nama . '.' . $lampiran->ekstensi, [
+            'Content-Type' => 'application/octet-stream',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
+            'Referrer-Policy' => 'no-referrer',
+            'Content-Length' => (string) $lampiran->ukuran_byte
+        ]);
+    }
+    private function lampiran(Pengumpulan $p, PengumpulanBerkas $l): Berkas
+    {
+        Gate::authorize('view', $p);
+        abort_unless($l->pengumpulan_id === $p->id && $l->aktif, 404);
+        $b = Berkas::query()->findOrFail($l->berkas_id);
+        abort_unless($b->status === Berkas::TERSEDIA && $b->diunggah_oleh === $p->pemilik_id && $l->cocok($b), 404);
+        return $b;
+    }
+    private function tokenUnduh(Request $r, Pengumpulan $p, Berkas $b): void
+    {
+        abort_unless(
+            $r->query('pemohon') === (string) $r->user()->id
+                && $r->query('versi_pengumpulan') === (string) $p->revisi && $r->query('versi_berkas') === (string) $b->revisi,
+            403,
+            'Tautan berubah. Klik Unduh kembali.'
+        );
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\MateriAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaMateri;
+use App\Models\Materi;
+use App\Models\User;
+use App\Policies\MateriPolicy;
+use App\Services\AksesMateri;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+use Tests\TestCase;
+
+class MateriAksesTest extends TestCase
+{
+    // Tidak memakai RefreshDatabase dan tidak menjalankan migrate:fresh.
+    // Seluruh fixture ada di SQLite :memory: khusus; tidak menyentuh siakad_ilyas.
+    protected function setUp(): void
+    {
+        parent::setUp();
+        if (! extension_loaded('pdo_sqlite')) {
+            $this->markTestSkipped('Aktifkan pdo_sqlite untuk tes basis data terisolasi.');
+        }
+        $this->app->detectEnvironment(fn() => 'testing');
+        config(['database.default' => 'materi_uji', 'database.connections.materi_uji' => [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+        ], 'materi.maks_lampiran' => 10]);
+        DB::purge('materi_uji');
+        $this->assertSame('sqlite', DB::connection()->getDriverName());
+        $this->assertSame(':memory:', DB::connection()->getDatabaseName());
+        Gate::policy(Materi::class, MateriPolicy::class);
+        // Fixture minimal untuk kontrak modul, bukan pengganti skema produksi.
+        Schema::create('users', function (Blueprint $t): void {
+            $t->id();
+            $t->string('nama');
+            $t->string('status');
+        });
+        Schema::create('roles', function (Blueprint $t): void {
+            $t->id();
+            $t->string('kode');
+        });
+        Schema::create('user_roles', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('user_id');
+            $t->unsignedBigInteger('role_id');
+            $t->timestamps();
+        });
+        Schema::create('dosen', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('user_id');
+            $t->string('status');
+        });
+        Schema::create('mahasiswa', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('user_id');
+        });
+        Schema::create('periode_akademik', function (Blueprint $t): void {
+            $t->id();
+            $t->string('status');
+        });
+        Schema::create('rombel', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('periode_akademik_id');
+        });
+        Schema::create('kelas_kuliah', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('rombel_id');
+            $t->string('kode');
+            $t->string('nama_mk_snapshot');
+            $t->string('status');
+        });
+        Schema::create('pengajar_kelas', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('kelas_kuliah_id');
+            $t->unsignedBigInteger('dosen_id');
+            $t->boolean('aktif');
+        });
+        Schema::create('pertemuan', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('kelas_kuliah_id');
+            $t->string('status');
+            $t->unique(['id', 'kelas_kuliah_id']);
+        });
+        Schema::create('riwayat_studi', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('mahasiswa_id');
+            $t->string('status');
+        });
+        Schema::create('registrasi_semester', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('riwayat_studi_id');
+            $t->unsignedBigInteger('rombel_id');
+            $t->unsignedBigInteger('periode_akademik_id');
+            $t->string('status');
+        });
+        Schema::create('krs', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('registrasi_semester_id');
+            $t->string('status');
+        });
+        Schema::create('detail_krs', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('krs_id');
+            $t->unsignedBigInteger('kelas_kuliah_id');
+            $t->string('status');
+        });
+        Schema::create('berkas', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('diunggah_oleh');
+            $t->string('status');
+            $t->string('pemeriksaan');
+            $t->unsignedInteger('revisi');
+        });
+        Schema::create('audit_log', function (Blueprint $t): void {
+            $t->id();
+            $t->unsignedBigInteger('pelaku_id')->nullable();
+            $t->string('entitas');
+            $t->unsignedBigInteger('entitas_id');
+            $t->unsignedInteger('versi_entitas');
+            $t->string('aksi');
+            $t->json('sebelum')->nullable();
+            $t->json('sesudah');
+            $t->text('alasan')->nullable();
+            $t->dateTime('waktu');
+            $t->timestamp('created_at')->nullable();
+        });
+        $paths = glob(database_path('migrations/*_create_materi_dan_materi_berkas_tables.php'));
+        $this->assertCount(1, $paths, 'Harus ada tepat satu migration materi dari panduan.');
+        (require $paths[0])->up();
+        $this->fixture();
+    }
+    protected function tearDown(): void
+    {
+        try {
+            DB::purge('materi_uji');
+        } finally {
+            parent::tearDown();
+        }
+    }
+    private function fixture(): void
+    {
+        DB::table('users')->insert([
+            ['id' => 1, 'nama' => 'Admin', 'status' => 'aktif'],
+            ['id' => 2, 'nama' => 'Dosen A', 'status' => 'aktif'],
+            ['id' => 3, 'nama' => 'Mahasiswa A', 'status' => 'aktif'],
+            ['id' => 4, 'nama' => 'Dosen B', 'status' => 'aktif'],
+            ['id' => 5, 'nama' => 'Keuangan', 'status' => 'aktif'],
+        ]);
+        DB::table('roles')->insert([
+            ['id' => 1, 'kode' => 'admin_akademik'],
+            ['id' => 2, 'kode' => 'dosen'],
+            ['id' => 3, 'kode' => 'mahasiswa'],
+            ['id' => 4, 'kode' => 'admin_keuangan']
+        ]);
+        foreach ([1 => 1, 2 => 2, 3 => 3, 4 => 2, 5 => 4] as $user => $role) {
+            DB::table('user_roles')->insert(['user_id' => $user, 'role_id' => $role]);
+        }
+        DB::table('dosen')->insert([['id' => 20, 'user_id' => 2, 'status' => 'aktif'], ['id' => 40, 'user_id' => 4, 'status' => 'aktif']]);
+        DB::table('mahasiswa')->insert(['id' => 30, 'user_id' => 3]);
+        DB::table('periode_akademik')->insert(['id' => 1, 'status' => 'aktif']);
+        DB::table('rombel')->insert(['id' => 1, 'periode_akademik_id' => 1]);
+        DB::table('kelas_kuliah')->insert([
+            ['id' => 100, 'rombel_id' => 1, 'kode' => 'PAI-A', 'nama_mk_snapshot' => 'Ilmu Hadis', 'status' => 'aktif'],
+            ['id' => 101, 'rombel_id' => 1, 'kode' => 'PAI-B', 'nama_mk_snapshot' => 'Fiqh', 'status' => 'aktif'],
+        ]);
+        DB::table('pengajar_kelas')->insert([
+            ['kelas_kuliah_id' => 100, 'dosen_id' => 20, 'aktif' => true],
+            ['kelas_kuliah_id' => 101, 'dosen_id' => 40, 'aktif' => true]
+        ]);
+        DB::table('pertemuan')->insert([
+            ['id' => 1, 'kelas_kuliah_id' => 100, 'status' => 'terjadwal'],
+            ['id' => 2, 'kelas_kuliah_id' => 101, 'status' => 'terjadwal']
+        ]);
+        DB::table('riwayat_studi')->insert(['id' => 1, 'mahasiswa_id' => 30, 'status' => 'aktif']);
+        DB::table('registrasi_semester')->insert(['id' => 1, 'riwayat_studi_id' => 1, 'rombel_id' => 1, 'periode_akademik_id' => 1, 'status' => 'aktif']);
+        DB::table('krs')->insert(['id' => 1, 'registrasi_semester_id' => 1, 'status' => 'disahkan']);
+        DB::table('detail_krs')->insert(['id' => 1, 'krs_id' => 1, 'kelas_kuliah_id' => 100, 'status' => 'aktif']);
+        DB::table('berkas')->insert([
+            ['id' => 1, 'diunggah_oleh' => 2, 'status' => 'tersedia', 'pemeriksaan' => 'format', 'revisi' => 1],
+            ['id' => 2, 'diunggah_oleh' => 4, 'status' => 'tersedia', 'pemeriksaan' => 'format', 'revisi' => 1]
+        ]);
+    }
+    private function data(array $tambahan = []): array
+    {
+        return array_replace([
+            'kelas_kuliah_id' => 100,
+            'pertemuan_id' => 1,
+            'form_token' => (string) Str::uuid(),
+            'judul' => 'Materi pertama',
+            'isi' => 'Uraian pembelajaran.',
+            'tautan_eksternal' => null,
+            'berkas_ids' => ['1'],
+            'alasan' => 'Perubahan untuk pengujian.'
+        ], $tambahan);
+    }
+    private function buat(): Materi
+    {
+        return app(KelolaMateri::class)->buat(2, $this->data());
+    }
+    private function terbit(): Materi
+    {
+        $m = $this->buat();
+        return app(KelolaMateri::class)->status('terbitkan', 2, $m, ['versi' => $m->versiForm(), 'alasan' => 'Materi siap dibaca peserta.']);
+    }
+    public function test_dosen_hanya_mengelola_kelas_penugasannya(): void
+    {
+        $a = app(AksesMateri::class);
+        $u = User::findOrFail(2);
+        $this->assertTrue($a->kelola($u, 100));
+        $this->assertFalse($a->kelola($u, 101));
+    }
+    public function test_mahasiswa_hanya_melihat_materi_terbit(): void
+    {
+        $m = $this->buat();
+        $u = User::findOrFail(3);
+        $a = app(AksesMateri::class);
+        $this->assertFalse($a->lihat($u, $m));
+        $m = app(KelolaMateri::class)->status('terbitkan', 2, $m, ['versi' => $m->versiForm(), 'alasan' => 'Siap diterbitkan sekarang.']);
+        $this->assertTrue($a->lihat($u, $m));
+        $m = app(KelolaMateri::class)->status('arsipkan', 2, $m, ['versi' => $m->versiForm(), 'alasan' => 'Materi sudah tidak dipakai.']);
+        $this->assertFalse($a->lihat($u, $m));
+    }
+    public function test_pencabutan_krs_mencabut_akses(): void
+    {
+        $m = $this->terbit();
+        $u = User::findOrFail(3);
+        $a = app(AksesMateri::class);
+        $this->assertTrue($a->lihat($u, $m));
+        DB::table('krs')->where('id', 1)->update(['status' => 'dibatalkan']);
+        $this->assertFalse($a->lihat($u, $m));
+    }
+    public function test_akun_nonaktif_dan_role_keuangan_ditolak(): void
+    {
+        $a = app(AksesMateri::class);
+        $this->assertFalse($a->masuk(User::findOrFail(5)));
+        $u = User::findOrFail(2);
+        DB::table('users')->where('id', 2)->update(['status' => 'nonaktif']);
+        $this->assertFalse($a->masuk($u));
+    }
+    public function test_pertemuan_batal_menyembunyikan_materi_dari_mahasiswa(): void
+    {
+        $m = $this->terbit();
+        DB::table('pertemuan')->where('id', 1)->update(['status' => 'batal']);
+        $this->assertFalse(app(AksesMateri::class)->lihat(User::findOrFail(3), $m));
+        $this->assertTrue(app(AksesMateri::class)->lihat(User::findOrFail(2), $m));
+    }
+    public function test_materi_kelas_lain_tidak_masuk_daftar_mahasiswa(): void
+    {
+        $m = app(KelolaMateri::class)->buat(4, $this->data(['kelas_kuliah_id' => 101, 'pertemuan_id' => 2, 'berkas_ids' => ['2']]));
+        app(KelolaMateri::class)->status('terbitkan', 4, $m, ['versi' => $m->versiForm(), 'alasan' => 'Terbitkan untuk kelas B.']);
+        $this->assertSame(0, app(AksesMateri::class)->batasi(Materi::query(), User::findOrFail(3))->count());
+    }
+    public function test_lampiran_milik_orang_lain_ditolak_dan_transaksi_dibatalkan(): void
+    {
+        try {
+            app(KelolaMateri::class)->buat(2, $this->data(['berkas_ids' => ['2']]));
+            $this->fail('Seharusnya ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(0, DB::table('materi')->count());
+            $this->assertSame(0, DB::table('audit_log')->count());
+        }
+    }
+    public function test_pengiriman_form_sama_tidak_menggandakan_materi(): void
+    {
+        $d = $this->data();
+        $a = app(KelolaMateri::class);
+        $m = $a->buat(2, $d);
+        $ulang = $a->buat(2, $d);
+        $this->assertSame($m->id, $ulang->id);
+        $this->assertSame(1, DB::table('materi')->count());
+        $this->assertSame(1, DB::table('materi_berkas')->count());
+        $this->assertSame(1, DB::table('audit_log')->count());
+    }
+    public function test_pertemuan_beda_kelas_ditolak(): void
+    {
+        $this->expectException(ValidationException::class);
+        app(KelolaMateri::class)->buat(2, $this->data(['pertemuan_id' => 2]));
+    }
+    public function test_form_lama_tidak_menimpa_revisi_baru(): void
+    {
+        $m = $this->buat();
+        $lama = $m->versiForm();
+        $baru = app(KelolaMateri::class)->ubah(2, $m, $this->data(['versi' => $lama, 'judul' => 'Judul baru']));
+        $this->assertSame(2, $baru->revisi);
+        $this->expectException(ValidationException::class);
+        app(KelolaMateri::class)->ubah(2, $m, $this->data(['versi' => $lama]));
+    }
+    public function test_materi_terbit_tidak_bisa_diedit_langsung(): void
+    {
+        $m = $this->terbit();
+        $this->expectException(AuthorizationException::class);
+        app(KelolaMateri::class)->ubah(2, $m, $this->data(['versi' => $m->versiForm()]));
+    }
+    public function test_melepas_lampiran_mempertahankan_objek_dan_riwayat(): void
+    {
+        $m = $this->buat();
+        $m = app(KelolaMateri::class)->ubah(2, $m, $this->data(['versi' => $m->versiForm(), 'berkas_ids' => []]));
+        $this->assertSame(0, $m->lampiran()->count());
+        $this->assertSame(1, $m->semuaLampiran()->count());
+        $this->assertSame(2, DB::table('berkas')->count());
+        $this->assertSame(2, DB::table('audit_log')->count());
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\KegiatanAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaKegiatan;
+use App\Http\Controllers\KegiatanController;
+use App\Models\Kegiatan;
+use App\Models\User;
+use App\Services\AksesKegiatan;
+use Carbon\Carbon;
+use Carbon\CarbonImmutable;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+
+class KegiatanAksesTest extends KegiatanDatabaseTestCase
+{
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Carbon::setTestNow(CarbonImmutable::parse('2030-01-10 02:00:00', 'UTC'));
+        CarbonImmutable::setTestNow(CarbonImmutable::parse('2030-01-10 02:00:00', 'UTC'));
+    }
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        CarbonImmutable::setTestNow();
+        parent::tearDown();
+    }
+    private function data(array $ganti = []): array
+    {
+        return array_replace([
+            'kelas_kuliah_id' => 100,
+            'pertemuan_id' => 1,
+            'form_token' => (string) Str::uuid(),
+            'jenis' => 'tugas',
+            'judul' => 'Tugas pertama',
+            'instruksi' => 'RAHASIA_SOAL untuk peserta yang berhak.',
+            'buka_lokal' => '2030-01-10T10:00',
+            'tenggat_lokal' => '2030-01-10T12:00',
+            'maks_mb' => 10,
+            'maks_berkas' => 3,
+            'ekstensi_diizinkan' => ['pdf'],
+            'berkas_ids' => ['1'],
+            'alasan' => 'Perubahan untuk pengujian.'
+        ], $ganti);
+    }
+    private function buat(array $ganti = []): Kegiatan
+    {
+        return app(KelolaKegiatan::class)->buat(2, $this->data($ganti));
+    }
+    private function ubahStatusKegiatan(Kegiatan $k, string $aksi, array $ganti = []): Kegiatan
+    {
+        return app(KelolaKegiatan::class)->status(
+            $aksi,
+            2,
+            $k,
+            array_replace(['versi' => $k->versiForm(), 'alasan' => 'Perubahan status untuk uji.'], $ganti)
+        );
+    }
+    public function test_dosen_tidak_mengelola_kelas_lain(): void
+    {
+        $a = app(AksesKegiatan::class);
+        $u = User::findOrFail(2);
+        $this->assertTrue($a->kelola($u, 100));
+        $this->assertFalse($a->kelola($u, 101));
+    }
+    public function test_draf_dan_arsip_disembunyikan_dari_mahasiswa(): void
+    {
+        $k = $this->buat();
+        $a = app(AksesKegiatan::class);
+        $u = User::findOrFail(3);
+        $this->assertFalse($a->lihat($u, $k));
+        $k = $this->ubahStatusKegiatan($k, 'terbitkan');
+        $this->assertTrue($a->lihat($u, $k));
+        $k = $this->ubahStatusKegiatan($k, 'arsipkan');
+        $this->assertFalse($a->lihat($u, $k));
+    }
+    public function test_instruksi_belum_bisa_dibaca_sebelum_waktu_mulai(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->buat(['buka_lokal' => '2030-01-10T11:00']), 'terbitkan');
+        $a = app(AksesKegiatan::class);
+        $u = User::findOrFail(3);
+        $this->assertTrue($a->lihat($u, $k));
+        $this->assertFalse($a->bacaIsi($u, $k));
+        $this->assertTrue($a->bacaIsi(User::findOrFail(2), $k));
+    }
+    public function test_html_sebelum_mulai_tidak_memuat_instruksi_atau_lampiran(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->buat(['buka_lokal' => '2030-01-10T11:00']), 'terbitkan');
+        $this->actingAs(User::findOrFail(3), 'web');
+        $view = app(KegiatanController::class)->show(Request::create('/kegiatan/' . $k->id), $k->fresh());
+        $html = $view->render();
+        $this->assertStringNotContainsString('RAHASIA_SOAL', $html);
+        $this->assertStringNotContainsString('/lampiran/', $html);
+        $this->assertStringContainsString('Instruksi dan lampiran tersedia mulai', $html);
+    }
+    public function test_endpoint_lampiran_ditolak_sebelum_mulai(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->buat(['buka_lokal' => '2030-01-10T11:00']), 'terbitkan');
+        $this->actingAs(User::findOrFail(3), 'web');
+        $this->expectException(AuthorizationException::class);
+        app(KegiatanController::class)->tautan(Request::create('/kegiatan/' . $k->id), $k, $k->lampiran()->firstOrFail());
+    }
+    public function test_krs_dicabut_langsung_mencabut_akses(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->buat(), 'terbitkan');
+        $a = app(AksesKegiatan::class);
+        $u = User::findOrFail(3);
+        $this->assertTrue($a->bacaIsi($u, $k));
+        DB::table('krs')->where('id', 1)->update(['status' => 'dibatalkan']);
+        $this->assertFalse($a->lihat($u, $k));
+        $this->assertFalse($a->bacaIsi($u, $k));
+    }
+    public function test_file_milik_akun_lain_ditolak_dan_transaksi_batal(): void
+    {
+        try {
+            $this->buat(['berkas_ids' => ['2']]);
+            $this->fail('Seharusnya ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(0, DB::table('kegiatan')->count());
+            $this->assertSame(0, DB::table('audit_log')->count());
+        }
+    }
+    public function test_pengiriman_form_sama_tidak_membuat_duplikat(): void
+    {
+        $d = $this->data();
+        $a = app(KelolaKegiatan::class);
+        $awal = $a->buat(2, $d);
+        $ulang = $a->buat(2, $d);
+        $this->assertSame($awal->id, $ulang->id);
+        $this->assertSame(1, DB::table('kegiatan')->count());
+        $this->assertSame(1, DB::table('kegiatan_berkas')->count());
+        $this->assertSame(1, DB::table('audit_log')->count());
+    }
+    public function test_pertemuan_beda_kelas_ditolak(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->buat(['pertemuan_id' => 2]);
+    }
+    public function test_tenggat_sebelum_mulai_ditolak(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->buat(['tenggat_lokal' => '2030-01-10T09:00']);
+    }
+    public function test_kegiatan_terbit_tidak_bisa_diedit(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->buat(), 'terbitkan');
+        $this->expectException(AuthorizationException::class);
+        app(KelolaKegiatan::class)->ubah(2, $k, $this->data(['versi' => $k->versiForm()]));
+    }
+    public function test_tenggat_tidak_boleh_diperpendek(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->buat(), 'terbitkan');
+        $this->expectException(ValidationException::class);
+        $this->ubahStatusKegiatan($k, 'perpanjang', ['tenggat_baru' => '2030-01-10T11:00']);
+    }
+    public function test_perpanjangan_tidak_membuka_status_ditutup(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->ubahStatusKegiatan($this->buat(), 'terbitkan'), 'tutup');
+        $k = $this->ubahStatusKegiatan($k, 'perpanjang', ['tenggat_baru' => '2030-01-10T13:00']);
+        $this->assertSame(Kegiatan::DITUTUP, $k->status);
+        $this->assertFalse($k->jendelaTerbuka());
+        $k = $this->ubahStatusKegiatan($k, 'bukaKembali');
+        $this->assertTrue($k->jendelaTerbuka());
+    }
+    public function test_pemulihan_pascaterbit_tidak_kembali_ke_draf(): void
+    {
+        $k = $this->ubahStatusKegiatan($this->ubahStatusKegiatan($this->buat(), 'terbitkan'), 'arsipkan');
+        $k = $this->ubahStatusKegiatan($k, 'pulihkan');
+        $this->assertSame(Kegiatan::DITUTUP, $k->status);
+        $this->assertNotNull($k->terbit_at);
+    }
+    public function test_revisi_lama_tidak_menimpa_draf_baru(): void
+    {
+        $k = $this->buat();
+        $versi = $k->versiForm();
+        app(KelolaKegiatan::class)->ubah(2, $k, $this->data(['versi' => $versi, 'judul' => 'Judul diperbarui']));
+        $this->expectException(ValidationException::class);
+        app(KelolaKegiatan::class)->ubah(2, $k, $this->data(['versi' => $versi]));
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\PengumpulanAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaKegiatan;
+use App\Actions\KelolaPengumpulan;
+use App\Http\Controllers\PengumpulanController;
+use App\Models\Pengumpulan;
+use App\Models\User;
+use App\Services\AksesPengumpulan;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\QueryException;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+use LogicException;
+
+class PengumpulanAksesTest extends PengumpulanDatabaseTestCase
+{
+    public function test_pembuatan_berulang_hanya_satu_draf_dan_satu_audit(): void
+    {
+        $k = $this->kegiatan();
+        $token = (string) Str::uuid();
+        $p = $this->draf($k, 0, $token);
+        $this->assertSame($p->id, $this->draf($k, 0, $token)->id);
+        $this->assertSame($p->id, $this->draf($k)->id);
+        $this->assertSame(1, Pengumpulan::count());
+        $this->assertSame(1, $this->auditJumlah());
+    }
+    public function test_token_pembuatan_lama_tidak_membuat_versi_baru_setelah_dikirim(): void
+    {
+        $k = $this->kegiatan();
+        $token = (string) Str::uuid();
+        $p = $this->kirim($this->isi($this->draf($k, 0, $token)));
+        $this->assertSame($p->id, $this->draf($k, 0, $token)->id);
+        $this->assertSame(1, Pengumpulan::count());
+    }
+    public function test_dasar_versi_lama_tidak_menciptakan_draf_tambahan(): void
+    {
+        $k = $this->kegiatan();
+        $this->kirim($this->isi($this->draf($k)));
+        $this->expectException(ValidationException::class);
+        $this->draf($k, 0);
+    }
+    public function test_draf_baru_tidak_menggantikan_kiriman_lama(): void
+    {
+        $k = $this->kegiatan();
+        $p = $this->kirim($this->isi($this->draf($k)));
+        $baru = $this->draf($k, 1);
+        $this->assertSame(2, $baru->versi);
+        $this->assertNull($baru->jawaban_teks);
+        $this->assertSame([$p->id], Pengumpulan::berlaku()->pluck('id')->all());
+    }
+    public function test_versi_final_terbaru_berlaku_dan_snapshot_lama_tetap(): void
+    {
+        $k = $this->kegiatan();
+        $p1 = $this->kirim($this->isi($this->draf($k), 'Jawaban lama'));
+        $p2 = $this->kirim($this->isi($this->draf($k, 1), 'Jawaban diperbaiki', ['11']));
+        $this->assertSame([$p2->id], Pengumpulan::berlaku()->pluck('id')->all());
+        $this->assertSame('Jawaban lama', $p1->fresh()->jawaban_teks);
+        $this->assertSame($p1->hash_jawaban, $p1->fresh()->hitungHash());
+        $this->assertSame(1, $p1->lampiran()->count());
+        $this->assertSame(1, $p2->lampiran()->count());
+    }
+    public function test_pengulangan_kirim_setelah_tenggat_mengembalikan_bukti_yang_sama(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        $data = ['versi_form' => $p->versiForm(), 'kunci_kirim' => $p->kunci_kirim];
+        $a = app(KelolaPengumpulan::class);
+        $final = $a->kirim(3, $p, $data);
+        $jumlah = $this->auditJumlah();
+        $this->jam('2030-01-10 05:00:00');
+        $ulang = $a->kirim(3, $p, $data);
+        $this->assertSame($final->id, $ulang->id);
+        $this->assertSame($final->hash_jawaban, $ulang->hash_jawaban);
+        $this->assertTrue($final->dikirim_at->equalTo($ulang->dikirim_at));
+        $this->assertSame($jumlah, $this->auditJumlah());
+    }
+    public function test_jawaban_kosong_tidak_dapat_dikirim(): void
+    {
+        $p = $this->draf($this->kegiatan());
+        try {
+            $this->kirim($p);
+            $this->fail('Jawaban kosong harus ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(Pengumpulan::DRAF, $p->fresh()->status);
+            $this->assertSame(1, $this->auditJumlah());
+        }
+    }
+    public function test_jawaban_teks_tanpa_berkas_dapat_dikirim(): void
+    {
+        $p = $this->kirim($this->isi($this->draf($this->kegiatan()), 'Jawaban teks', []));
+        $this->assertSame(Pengumpulan::DIKIRIM, $p->status);
+        $this->assertSame(0, $p->lampiran()->count());
+    }
+    public function test_jawaban_berkas_tanpa_teks_dapat_dikirim(): void
+    {
+        $p = $this->kirim($this->isi($this->draf($this->kegiatan()), null, ['11']));
+        $this->assertSame(Pengumpulan::DIKIRIM, $p->status);
+    }
+    public function test_tepat_pada_tenggat_sudah_ditolak(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        $this->jam('2030-01-10 04:00:00');
+        $this->expectException(ValidationException::class);
+        $this->kirim($p);
+    }
+    public function test_sebelum_mulai_tidak_bisa_membuat_draf(): void
+    {
+        $k = $this->kegiatan(['buka_lokal' => '2030-01-10T11:00']);
+        $this->expectException(ValidationException::class);
+        $this->draf($k);
+    }
+    public function test_penutupan_oleh_dosen_menghentikan_pengiriman(): void
+    {
+        $k = $this->kegiatan();
+        $p = $this->isi($this->draf($k));
+        app(KelolaKegiatan::class)->status('tutup', 2, $k, ['versi' => $k->versiForm(), 'alasan' => 'Menutup kegiatan untuk pengujian.']);
+        $this->expectException(ValidationException::class);
+        $this->kirim($p);
+    }
+    public function test_konteks_nonaktif_memblokir_pengiriman(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        $audit = $this->auditJumlah();
+        foreach (
+            [
+                ['detail_krs', 1, 'dibatalkan', 'aktif'],
+                ['krs', 1, 'dibatalkan', 'disahkan'],
+                ['registrasi_semester', 1, 'nonaktif', 'aktif'],
+                ['riwayat_studi', 1, 'nonaktif', 'aktif'],
+                ['kelas_kuliah', 100, 'selesai', 'aktif'],
+                ['periode_akademik', 1, 'tutup', 'aktif'],
+                ['pertemuan', 1, 'batal', 'terjadwal']
+            ] as [$t, $id, $mati, $aktif]
+        ) {
+            DB::table($t)->where('id', $id)->update(['status' => $mati]);
+            try {
+                $this->kirim($p);
+                $this->fail('Pengiriman harus ditolak untuk ' . $t);
+            } catch (ValidationException) {
+                $this->assertSame(Pengumpulan::DRAF, $p->fresh()->status);
+                $this->assertSame($audit, $this->auditJumlah());
+            }
+            DB::table($t)->where('id', $id)->update(['status' => $aktif]);
+        }
+    }
+    public function test_revisi_lama_tidak_menimpa_draf(): void
+    {
+        $p = $this->draf($this->kegiatan());
+        $versi = $p->versiForm();
+        $this->isi($p, 'Jawaban baru');
+        $this->expectException(ValidationException::class);
+        app(KelolaPengumpulan::class)->ubah(3, $p, ['versi_form' => $versi, 'jawaban_teks' => 'Jawaban usang', 'berkas_ids' => []]);
+    }
+    public function test_draf_hanya_dibaca_pemilik_bukan_admin_atau_dosen(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        $a = app(AksesPengumpulan::class);
+        $this->assertTrue($a->lihat(User::findOrFail(3), $p));
+        foreach ([1, 2, 4, 5, 6] as $id) {
+            $this->assertFalse($a->lihat(User::findOrFail($id), $p));
+        }
+    }
+    public function test_kiriman_final_hanya_pemilik_admin_akademik_dan_dosen_kelas(): void
+    {
+        $p = $this->kirim($this->isi($this->draf($this->kegiatan())));
+        $a = app(AksesPengumpulan::class);
+        foreach ([1, 2, 3] as $id) {
+            $this->assertTrue($a->lihat(User::findOrFail($id), $p));
+        }
+        foreach ([4, 5, 6] as $id) {
+            $this->assertFalse($a->lihat(User::findOrFail($id), $p));
+        }
+        DB::table('pengajar_kelas')->where('dosen_id', 20)->update(['aktif' => false]);
+        $this->assertFalse($a->lihat(User::findOrFail(2), $p));
+    }
+    public function test_pencabutan_krs_tidak_menghapus_akses_bukti_sendiri(): void
+    {
+        $k = $this->kegiatan();
+        $p = $this->kirim($this->isi($this->draf($k)));
+        $a = app(AksesPengumpulan::class);
+        DB::table('krs')->where('id', 1)->update(['status' => 'dibatalkan']);
+        $this->assertTrue($a->lihat(User::findOrFail(3), $p));
+        $this->assertFalse($a->bolehTulis(User::findOrFail(3), $k));
+        DB::table('users')->where('id', 3)->update(['status' => 'nonaktif']);
+        $this->assertFalse($a->lihat(User::findOrFail(3), $p));
+    }
+    public function test_berkas_orang_lain_ditolak_tanpa_perubahan_parsial(): void
+    {
+        $p = $this->draf($this->kegiatan());
+        try {
+            $this->isi($p, 'Teks', ['11', '12']);
+            $this->fail('Berkas orang lain harus ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(0, $p->semuaLampiran()->count());
+            $this->assertNull($p->fresh()->jawaban_teks);
+            $this->assertSame(1, $this->auditJumlah());
+        }
+    }
+    public function test_batas_jumlah_ukuran_dan_format_diperiksa(): void
+    {
+        $p = $this->draf($this->kegiatan(['maks_berkas' => 1]));
+        try {
+            $this->isi($p, 'Teks', ['11', '13']);
+            $this->fail('Jumlah harus ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(0, $p->lampiran()->count());
+        }
+        DB::table('berkas')->where('id', 11)->update(['ukuran_byte' => 20971520]);
+        try {
+            $this->isi($p);
+            $this->fail('Ukuran harus ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(0, $p->lampiran()->count());
+        }
+        DB::table('berkas')->where('id', 11)->update(['ukuran_byte' => 12, 'ekstensi' => 'png', 'mime_type' => 'image/png']);
+        $this->expectException(ValidationException::class);
+        $this->isi($p);
+    }
+    public function test_status_file_dicek_lagi_ketika_kirim(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        DB::table('berkas')->where('id', 11)->update(['status' => 'dihapus']);
+        $this->expectException(ValidationException::class);
+        $this->kirim($p);
+    }
+    public function test_perubahan_hash_file_ditolak(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        DB::table('berkas')->where('id', 11)->update(['sha256' => str_repeat('f', 64)]);
+        $this->expectException(ValidationException::class);
+        $this->kirim($p);
+    }
+    public function test_jawaban_dan_lampiran_final_tidak_dapat_diubah(): void
+    {
+        $p = $this->kirim($this->isi($this->draf($this->kegiatan())));
+        try {
+            DB::transaction(function () use ($p): void {
+                $p->jawaban_teks = 'Diubah';
+                $p->revisi++;
+                $p->save();
+            });
+            $this->fail('Jawaban final harus terkunci.');
+        } catch (LogicException) {
+            $this->assertSame('Jawaban mahasiswa A', $p->fresh()->jawaban_teks);
+        }
+        $this->expectException(LogicException::class);
+        DB::transaction(function () use ($p): void {
+            $l = $p->lampiran()->firstOrFail();
+            $l->aktif = false;
+            $l->dilepas_at = now('UTC');
+            $l->save();
+        });
+    }
+    public function test_unique_database_mencegah_dua_draf_per_peserta(): void
+    {
+        $p = $this->draf($this->kegiatan());
+        $row = $p->getAttributes();
+        unset($row['id']);
+        $row['versi'] = 2;
+        $row['token_draf'] = (string) Str::uuid();
+        $row['kunci_kirim'] = bin2hex(random_bytes(32));
+        $this->expectException(QueryException::class);
+        DB::table('pengumpulan')->insert($row);
+    }
+    public function test_dosen_tidak_bisa_meminta_tautan_lampiran_draf(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()));
+        $this->actingAs(User::findOrFail(2), 'web');
+        $this->expectException(AuthorizationException::class);
+        app(PengumpulanController::class)->tautan(Request::create('/pengumpulan/' . $p->id), $p, $p->lampiran()->firstOrFail());
+    }
+    public function test_input_pemilik_palsu_ditolak_oleh_request(): void
+    {
+        $p = $this->draf($this->kegiatan());
+        $this->actingAs(User::findOrFail(3), 'web');
+        $this->patchJson(route('pengumpulan.update', $p), [
+            'versi_form' => $p->versiForm(),
+            'jawaban_teks' => 'Teks',
+            'lampiran_ids' => '',
+            'pemilik_id' => 6
+        ])->assertUnprocessable()->assertJsonValidationErrors('pemilik_id');
+    }
+    public function test_html_jawaban_ditampilkan_sebagai_teks(): void
+    {
+        $p = $this->isi($this->draf($this->kegiatan()), '<script>alert(1)</script>', []);
+        $this->actingAs(User::findOrFail(3), 'web');
+        $r = Request::create('/pengumpulan/' . $p->id);
+        $r->setUserResolver(fn() => User::findOrFail(3));
+        $html = app(PengumpulanController::class)->show($r, $p, app(AksesPengumpulan::class))->render();
+        $this->assertStringNotContainsString('<script>alert(1)</script>', $html);
+        $this->assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $html);
+    }
+    public function test_rekap_tidak_membaca_draf_sebagai_kiriman(): void
+    {
+        $k = $this->kegiatan();
+        $this->isi($this->draf($k));
+        $this->actingAs(User::findOrFail(2), 'web');
+        $r = Request::create('/pengumpulan/kegiatan/' . $k->id . '/rekap');
+        $r->setUserResolver(fn() => User::findOrFail(2));
+        $data = app(PengumpulanController::class)->rekap($r, $k, app(AksesPengumpulan::class))->getData();
+        $this->assertSame(2, $data['total']);
+        $this->assertSame(0, $data['sudah']);
+        $this->assertSame(0, $data['historis']->total());
+        $this->kirim(Pengumpulan::firstOrFail());
+        $data = app(PengumpulanController::class)->rekap($r, $k, app(AksesPengumpulan::class))->getData();
+        $this->assertSame(1, $data['sudah']);
+        $this->assertSame(1, $data['historis']->total());
+    }
+}

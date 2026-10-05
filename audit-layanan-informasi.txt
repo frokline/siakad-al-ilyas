@@ -1,0 +1,2027 @@
+
+================================================================================
+FILE: .\app\Services\AksesSurat.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\PermohonanSurat;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+
+final class AksesSurat
+{
+    public function petugas(User $u): bool
+    {
+        return app(AksesJenisSurat::class)->kelola($u);
+    }
+    public function mahasiswa(User $u): bool
+    {
+        return User::query()->whereKey($u->id)->where('status', 'aktif')->has('mahasiswa')
+            ->whereHas('roles', fn(Builder $q) => $q->where('roles.kode', 'mahasiswa'))->exists();
+    }
+    public function masuk(User $u): bool
+    {
+        return $this->petugas($u) || $this->mahasiswa($u);
+    }
+    public function pemilik(User $u, PermohonanSurat $p): bool
+    {
+        return $this->mahasiswa($u) && $p->pemohon_id === (int) $u->id
+            && DB::table('mahasiswa')->where('id', $p->mahasiswa_id)->where('user_id', $u->id)->exists();
+    }
+    public function batasi(Builder $q, User $u): Builder
+    {
+        if ($this->petugas($u)) {
+            return $q;
+        }
+        if (! $this->mahasiswa($u)) {
+            return $q->whereRaw('1 = 0');
+        }
+        return $q->where('pemohon_id', $u->id)->whereIn('mahasiswa_id', DB::table('mahasiswa')->select('id')->where('user_id', $u->id));
+    }
+    public function lihat(User $u, PermohonanSurat $p): bool
+    {
+        return $this->petugas($u) || $this->pemilik($u, $p);
+    }
+    public function tindakan(User $u, PermohonanSurat $p, string $tujuan): bool
+    {
+        if (! in_array($tujuan, PermohonanSurat::TRANSISI[$p->status] ?? [], true)) {
+            return false;
+        }
+        if ($tujuan === 'dibatalkan' && $p->status === 'diajukan' && $this->pemilik($u, $p)) {
+            return true;
+        }
+        return $this->petugas($u) && $p->pemohon_id !== (int) $u->id;
+    }
+}
+
+
+================================================================================
+FILE: .\app\Services\AksesKalender.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\KalenderAkademik;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+
+final class AksesKalender
+{
+    public function masuk(User $u): bool
+    {
+        return app(AksesBerkas::class)->masuk($u);
+    }
+    public function kelola(User $u): bool
+    {
+        return app(AksesJenisSurat::class)->kelola($u);
+    }
+    public function batasi(Builder $q, User $u): Builder
+    {
+        if ($this->kelola($u)) {
+            return $q;
+        }
+        if (! $this->masuk($u)) {
+            return $q->whereRaw('1 = 0');
+        }
+        // Agenda terbit adalah informasi akademik bersama; prodi merupakan filter, bukan ACL.
+        // Pembatalan agenda yang pernah terbit tetap terlihat agar pengguna mengetahui perubahan.
+        return $q->whereIn('status', ['terbit', 'batal'])->whereNotNull('diterbitkan_at')->where('diterbitkan_at', '<=', now('UTC'));
+    }
+    public function lihat(User $u, KalenderAkademik $k): bool
+    {
+        return $this->batasi(KalenderAkademik::query(), $u)->whereKey($k->id)->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Services\AksesPengumuman.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\Pengumuman;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+
+final class AksesPengumuman
+{
+    public const ROLES = ['admin_akademik', 'admin_keuangan', 'dosen', 'mahasiswa'];
+    public function __construct(private AksesMateri $materi, private AksesBerkas $berkas) {}
+    public function masuk(User $u): bool
+    {
+        return $this->berkas->masuk($u);
+    }
+    public function admin(User $u): bool
+    {
+        return $this->materi->admin($u);
+    }
+    public function menulis(User $u): bool
+    {
+        return $this->admin($u) || $this->materi->dosen($u);
+    }
+    public function kelola(Builder $q, User $u): Builder
+    {
+        if ($this->admin($u)) {
+            return $q;
+        }
+        if (! $this->materi->dosen($u)) {
+            return $q->whereRaw('1 = 0');
+        }
+        return $q->where('pembuat_id', $u->id)->whereHas('sasaran')
+            ->whereDoesntHave('sasaran', function (Builder $s) use ($u): void {
+                $s->where(function (Builder $b) use ($u): void {
+                    $b->where('lingkup', '!=', 'kelas')->orWhereNull('kelas_kuliah_id')
+                        ->orWhereNotIn('kelas_kuliah_id', $this->materi->kelasKelola($u)->select('kelas_kuliah.id'))
+                        ->orWhereHas('role', fn($r) => $r->whereNotIn('kode', ['dosen', 'mahasiswa']));
+                });
+            });
+    }
+    public function mengelola(User $u, Pengumuman $p): bool
+    {
+        return $this->kelola(Pengumuman::query(), $u)->whereKey($p->id)->exists();
+    }
+    public function membaca(User $u, Pengumuman $p): bool
+    {
+        return $this->mengelola($u, $p) || $this->bacaan(Pengumuman::query(), $u)->whereKey($p->id)->exists();
+    }
+    public function bacaan(Builder $q, User $u): Builder
+    {
+        if (! $this->masuk($u)) {
+            return $q->whereRaw('1 = 0');
+        }
+        $roles = User::query()->findOrFail($u->id)->roles()->whereIn('kode', self::ROLES)->pluck('roles.kode')->all();
+        $roles = array_values(array_filter($roles, fn($r) => match ($r) {
+            'dosen' => $this->materi->dosen($u),
+            'mahasiswa' => $this->materi->mahasiswa($u),
+            default => true,
+        }));
+        return $q->where('status', 'terbit')->where('terbit_at', '<=', now('UTC'))
+            ->where(fn($b) => $b->whereNull('berakhir_at')->orWhere('berakhir_at', '>', now('UTC')))
+            ->whereHas('sasaran', function (Builder $s) use ($u, $roles): void {
+                $s->where(function (Builder $semua) use ($u, $roles): void {
+                    $semua->whereRaw('1 = 0');
+                    foreach ($roles as $role) {
+                        // Role dan keanggotaan harus berasal dari persona yang sama.
+                        $semua->orWhere(function (Builder $persona) use ($u, $role): void {
+                            $persona->where(fn($b) => $b->whereNull('role_id')->orWhereHas('role', fn($r) => $r->where('kode', $role)))
+                                ->where(function (Builder $lingkup) use ($u, $role): void {
+                                    $lingkup->where('lingkup', 'kampus');
+                                    if (! in_array($role, ['dosen', 'mahasiswa'], true)) {
+                                        return;
+                                    }
+                                    $kelas = $role === 'dosen'
+                                        ? \App\Models\KelasKuliah::query()->whereIn('kelas_kuliah.status', ['aktif', 'selesai'])
+                                        ->whereIn('kelas_kuliah.id', DB::table('pengajar_kelas as aj')->join('dosen as ds', 'ds.id', '=', 'aj.dosen_id')
+                                            ->where('aj.aktif', true)->where('ds.user_id', $u->id)->where('ds.status', 'aktif')->select('aj.kelas_kuliah_id'))
+                                        : $this->materi->kelasPeserta($u);
+                                    $lingkup->orWhere(fn($b) => $b->where('lingkup', 'kelas')->whereIn('kelas_kuliah_id', (clone $kelas)->select('kelas_kuliah.id')));
+                                    $prodi = $role === 'mahasiswa'
+                                        ? DB::table('riwayat_studi as h')->join('mahasiswa as m', 'm.id', '=', 'h.mahasiswa_id')
+                                        ->join('kurikulum as k', 'k.id', '=', 'h.kurikulum_id')->where('m.user_id', $u->id)
+                                        ->where('h.status', 'aktif')->select('k.program_studi_id')
+                                        : DB::table('kelas_kuliah as c')->join('rombel as b', 'b.id', '=', 'c.rombel_id')
+                                        ->join('paket_semester as p', 'p.id', '=', 'b.paket_semester_id')
+                                        ->join('kurikulum as k', 'k.id', '=', 'p.kurikulum_id')
+                                        ->whereIn('c.id', (clone $kelas)->select('kelas_kuliah.id'))->select('k.program_studi_id');
+                                    $lingkup->orWhere(fn($b) => $b->where('lingkup', 'prodi')->whereIn('program_studi_id', $prodi));
+                                });
+                        });
+                    }
+                });
+            });
+    }
+}
+
+
+================================================================================
+FILE: .\app\Services\AksesNotifikasi.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\{Notifikasi, User};
+use Illuminate\Database\Eloquent\Builder;
+
+final class AksesNotifikasi
+{
+    public function __construct(private SumberNotifikasi $sumber) {}
+    public function masuk(User $u): bool
+    {
+        return $this->sumber->masuk($u);
+    }
+    public function batasi(Builder $q, User $u): Builder
+    {
+        $q->where('notifikasi.penerima_id', $u->id);
+        if (! $this->masuk($u)) {
+            return $q->whereRaw('1 = 0');
+        }
+        return $q->where(function (Builder $b) use ($u): void {
+            $b->whereRaw('1 = 0');
+            foreach ($this->sumber->aktif() as $jenis) {
+                $def = $this->sumber->definisi($jenis);
+                $b->orWhere(fn(Builder $s) => $s->where('notifikasi.jenis', $jenis)->where('notifikasi.sumber_tabel', $def['tabel'])
+                    ->whereIn('notifikasi.sumber_id', $this->sumber->query($jenis, $u)->select($def['tabel'] . '.id')));
+            }
+        });
+    }
+    public function lihat(User $u, Notifikasi $n): bool
+    {
+        return $this->batasi(Notifikasi::query(), $u)->whereKey($n->id)->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\PermohonanSuratPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\PermohonanSurat;
+use App\Models\User;
+use App\Services\AksesSurat;
+
+class PermohonanSuratPolicy
+{
+    public function __construct(private readonly AksesSurat $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->masuk($u);
+    }
+    public function create(User $u): bool
+    {
+        return $this->akses->mahasiswa($u);
+    }
+    public function view(User $u, PermohonanSurat $p): bool
+    {
+        return $this->akses->lihat($u, $p);
+    }
+    public function tindakan(User $u, PermohonanSurat $p, string $tujuan): bool
+    {
+        return $this->akses->tindakan($u, $p, $tujuan);
+    }
+    public function download(User $u, PermohonanSurat $p, string $bagian): bool
+    {
+        return $this->view($u, $p) && ($bagian === 'lampiran' ? $p->lampiran_berkas_id !== null : ($bagian === 'hasil' && $p->status === 'terbit'));
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\KalenderAkademikPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\KalenderAkademik;
+use App\Models\User;
+use App\Services\AksesKalender;
+
+class KalenderAkademikPolicy
+{
+    public function __construct(private readonly AksesKalender $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->masuk($u);
+    }
+    public function view(User $u, KalenderAkademik $k): bool
+    {
+        return $this->akses->lihat($u, $k);
+    }
+    public function create(User $u): bool
+    {
+        return $this->akses->kelola($u);
+    }
+    public function update(User $u, KalenderAkademik $k): bool
+    {
+        return $this->akses->kelola($u) && $k->status !== 'batal';
+    }
+    public function terbitkan(User $u, KalenderAkademik $k): bool
+    {
+        return $this->akses->kelola($u) && $k->status === 'draf';
+    }
+    public function batalkan(User $u, KalenderAkademik $k): bool
+    {
+        return $this->akses->kelola($u) && $k->status !== 'batal';
+    }
+    public function audit(User $u, KalenderAkademik $k): bool
+    {
+        return $this->akses->kelola($u);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\PengumumanPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\Pengumuman;
+use App\Models\User;
+use App\Services\AksesPengumuman;
+
+class PengumumanPolicy
+{
+    public function __construct(private AksesPengumuman $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->masuk($u);
+    }
+    public function create(User $u): bool
+    {
+        return $this->akses->menulis($u);
+    }
+    public function view(User $u, Pengumuman $p): bool
+    {
+        return $this->akses->membaca($u, $p);
+    }
+    public function audit(User $u, Pengumuman $p): bool
+    {
+        return $this->akses->mengelola($u, $p);
+    }
+    public function update(User $u, Pengumuman $p): bool
+    {
+        return $p->status === 'draf' && $this->audit($u, $p);
+    }
+    public function terbit(User $u, Pengumuman $p): bool
+    {
+        return $this->update($u, $p);
+    }
+    public function arsip(User $u, Pengumuman $p): bool
+    {
+        return $p->status !== 'arsip' && $this->audit($u, $p);
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\NotifikasiPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\{Notifikasi, User};
+use App\Services\AksesNotifikasi;
+
+class NotifikasiPolicy
+{
+    public function __construct(private AksesNotifikasi $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->masuk($u);
+    }
+    public function update(User $u, Notifikasi $n): bool
+    {
+        return $this->akses->lihat($u, $n);
+    }
+    // Tidak ada bypass admin: kotak masuk tetap milik penerima.
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\PermohonanSuratController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaPermohonanSurat;
+use App\Http\Requests\PermohonanSuratRequest;
+use App\Models\Berkas;
+use App\Models\JenisSurat;
+use App\Models\PermohonanSurat;
+use App\Services\AksesSurat;
+use App\Services\BerkasSurat;
+use App\Services\KonteksSurat;
+use App\Services\PenyimpananBerkas;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class PermohonanSuratController extends Controller
+{
+    public function index(Request $r, AksesSurat $akses): View
+    {
+        Gate::authorize('viewAny', PermohonanSurat::class);
+        $f = $r->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'status' => ['nullable', Rule::in(array_keys(PermohonanSurat::STATUS))],
+            'page' => ['nullable', 'integer', 'between:1,100000']
+        ]);
+        $q = $akses->batasi(PermohonanSurat::query(), $r->user());
+        if (! empty($f['q'])) {
+            $q->where(fn($b) => $b->where('nomor_pengajuan', 'like', '%' . $f['q'] . '%')->orWhere('nomor_surat', 'like', '%' . $f['q'] . '%'));
+        }
+        if (! empty($f['status'])) {
+            $q->where('status', $f['status']);
+        }
+        return view('permohonan_surat.index', ['daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(), 'filter' => $f]);
+    }
+    public function create(Request $r, KonteksSurat $k): View
+    {
+        Gate::authorize('create', PermohonanSurat::class);
+        $filter = $this->filterBerkas($r);
+        return view('permohonan_surat.create', [
+            'registrasi' => $k->pilihan($r->user()->id)->limit(100)->get(),
+            'jenis' => JenisSurat::query()->where('kode', JenisSurat::AKTIF_KULIAH)->where('aktif', true)->first(),
+            'berkas' => $this->berkas($r, $filter, false),
+            'filter' => $filter,
+            'token' => (string) Str::uuid()
+        ]);
+    }
+    public function store(PermohonanSuratRequest $r, KelolaPermohonanSurat $aksi): RedirectResponse
+    {
+        $p = $aksi->ajukan($r->user()->id, $r->dataSurat());
+        return redirect()->route('surat.show', $p)->with('info', 'Permohonan tercatat. Pantau proses pada halaman ini.');
+    }
+    public function show(Request $r, PermohonanSurat $permohonanSurat): View
+    {
+        Gate::authorize('view', $permohonanSurat);
+        $filter = $this->filterBerkas($r);
+        $permohonanSurat->load(['riwayat' => fn($q) => $q->orderBy('revisi_permohonan'), 'riwayat.pelaku']);
+        $pilihan = array_filter(PermohonanSurat::TRANSISI[$permohonanSurat->status], fn($tujuan) => Gate::allows('tindakan', [$permohonanSurat, $tujuan]));
+        return view('permohonan_surat.show', [
+            'p' => $permohonanSurat,
+            'pilihan' => $pilihan,
+            'filter' => $filter,
+            'berkas' => in_array('terbit', $pilihan, true) ? $this->berkas($r, $filter, true) : null
+        ]);
+    }
+    public function tindakan(PermohonanSuratRequest $r, PermohonanSurat $permohonanSurat, KelolaPermohonanSurat $aksi): RedirectResponse
+    {
+        $v = $r->dataSurat();
+        Gate::authorize('tindakan', [$permohonanSurat, $v['tujuan']]);
+        $p = $aksi->tindakan($r->user()->id, $permohonanSurat, $v);
+        return redirect()->route('surat.show', $p)->with('info', 'Status berubah menjadi ' . PermohonanSurat::STATUS[$p->status] . '.');
+    }
+    public function tautan(Request $r, PermohonanSurat $permohonanSurat, string $bagian): RedirectResponse
+    {
+        $b = $this->dokumen($permohonanSurat, $bagian);
+        return redirect()->to(URL::temporarySignedRoute('surat.unduh', now()->addMinutes(2), [
+            'permohonanSurat' => $permohonanSurat->id,
+            'bagian' => $bagian,
+            'pemohon' => $r->user()->id,
+            'versi' => $permohonanSurat->revisi,
+            'versi_berkas' => $b->revisi
+        ]));
+    }
+    public function unduh(Request $r, PermohonanSurat $permohonanSurat, string $bagian, PenyimpananBerkas $storage): StreamedResponse
+    {
+        $b = $this->dokumen($permohonanSurat, $bagian);
+        $this->token($r, $permohonanSurat, $b);
+        try {
+            $stream = $storage->buka($b);
+        } catch (\Throwable $e) {
+            Log::warning('Unduh surat gagal.', ['permohonan_id' => $permohonanSurat->id, 'bagian' => $bagian, 'jenis' => $e::class]);
+            abort(503, 'Berkas tidak dapat diunduh. Hubungi bagian akademik.');
+        }
+        try {
+            $permohonanSurat->refresh();
+            $b = $this->dokumen($permohonanSurat, $bagian);
+            $this->token($r, $permohonanSurat, $b);
+        } catch (\Throwable $e) {
+            fclose($stream);
+            throw $e;
+        }
+        return response()->streamDownload(
+            function () use ($stream): void {
+                try {
+                    fpassthru($stream);
+                } finally {
+                    fclose($stream);
+                }
+            },
+            $bagian . '-' . $permohonanSurat->nomor_pengajuan . '.' . $b->ekstensi,
+            [
+                'Content-Type' => 'application/octet-stream',
+                'Content-Length' => (string) $b->ukuran_byte,
+                'X-Content-Type-Options' => 'nosniff',
+                'Cache-Control' => 'private, no-store',
+                'Referrer-Policy' => 'no-referrer'
+            ]
+        );
+    }
+    private function dokumen(PermohonanSurat $p, string $bagian): Berkas
+    {
+        Gate::authorize('download', [$p, $bagian]);
+        $id = $bagian === 'lampiran' ? $p->lampiran_berkas_id : $p->hasil_berkas_id;
+        $snapshot = $bagian === 'lampiran' ? $p->lampiran_snapshot : $p->hasil_snapshot;
+        $b = Berkas::query()->findOrFail($id);
+        abort_unless(BerkasSurat::cocok($b, $snapshot), 404);
+        return $b;
+    }
+    private function token(Request $r, PermohonanSurat $p, Berkas $b): void
+    {
+        abort_unless($r->query('pemohon') === (string) $r->user()->id && $r->query('versi') === (string) $p->revisi
+            && $r->query('versi_berkas') === (string) $b->revisi, 403, 'Tautan tidak berlaku. Klik Unduh kembali.');
+    }
+    private function filterBerkas(Request $r): array
+    {
+        return $r->validate(['q_berkas' => ['nullable', 'string', 'max:100'], 'page' => ['nullable', 'integer', 'between:1,100000']]);
+    }
+    private function berkas(Request $r, array $f, bool $hasil): \Illuminate\Contracts\Pagination\LengthAwarePaginator
+    {
+        $q = Berkas::query()->where('diunggah_oleh', $r->user()->id)->where('status', Berkas::TERSEDIA)
+            ->whereIn('ekstensi', $hasil ? ['pdf'] : ['pdf', 'jpg', 'png']);
+        if (! empty($f['q_berkas'])) {
+            $q->where('label', 'like', '%' . $f['q_berkas'] . '%');
+        }
+        return $q->orderByDesc('id')->paginate(15)->withQueryString();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\KalenderAkademikController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaKalenderAkademik;
+use App\Http\Requests\KalenderAkademikRequest;
+use App\Http\Requests\KalenderAkademikStatusRequest;
+use App\Models\KalenderAkademik;
+use App\Services\AksesKalender;
+use App\Services\AturanKalender;
+use App\Services\GridKalender;
+use Carbon\CarbonImmutable;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Illuminate\View\View;
+
+class KalenderAkademikController extends Controller
+{
+    public function index(Request $r, AksesKalender $akses, GridKalender $grid): View
+    {
+        Gate::authorize('viewAny', KalenderAkademik::class);
+        $f = $r->validate([
+            'bulan' => ['nullable', 'date_format:Y-m', 'regex:/\A(?:20[0-9]{2}|2100)-(?:0[1-9]|1[0-2])\z/'],
+            'hari' => ['nullable', 'date_format:Y-m-d'],
+            'tampilan' => ['nullable', Rule::in(['bulan', 'daftar'])],
+            'jenis' => ['nullable', Rule::in(array_keys(KalenderAkademik::JENIS))],
+            'status' => ['nullable', Rule::in(array_keys(KalenderAkademik::STATUS))],
+            'periode_akademik_id' => ['nullable', 'integer', 'min:1'],
+            'program_studi_id' => ['nullable', 'integer', 'min:1'],
+            'kampus_saja' => ['nullable', 'boolean'],
+            'q' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'between:1,100000']
+        ]);
+        $f['bulan'] = $f['bulan'] ?? now(KalenderAkademik::ZONA)->format('Y-m');
+        $f['tampilan'] = $f['tampilan'] ?? 'bulan';
+        $bulan = CarbonImmutable::createFromFormat('!Y-m', $f['bulan'], KalenderAkademik::ZONA);
+        $awal = $bulan->startOfMonth();
+        $akhir = $awal->addMonth();
+        if ($f['tampilan'] === 'daftar' && ! empty($f['hari'])) {
+            if (substr($f['hari'], 0, 7) !== $f['bulan']) {
+                throw ValidationException::withMessages(['hari' => 'Hari harus berada pada bulan yang dipilih.']);
+            }
+            $awal = CarbonImmutable::createFromFormat('!Y-m-d', $f['hari'], KalenderAkademik::ZONA);
+            $akhir = $awal->addDay();
+        }
+        $q = $akses->batasi(KalenderAkademik::query(), $r->user())->with(['periodeAkademik:id,kode', 'programStudi:id,nama'])
+            ->where('mulai_at', '<', $akhir->utc()->format('Y-m-d H:i:s'))->where('selesai_at', '>', $awal->utc()->format('Y-m-d H:i:s'));
+        foreach (['jenis', 'status', 'periode_akademik_id'] as $key) {
+            if (! empty($f[$key])) {
+                $q->where($key, $f[$key]);
+            }
+        }
+        if (! empty($f['kampus_saja'])) {
+            $q->whereNull('program_studi_id');
+        } elseif (! empty($f['program_studi_id'])) {
+            // Agenda kampus tetap relevan ketika prodi tertentu dipilih.
+            $q->where(fn($b) => $b->whereNull('program_studi_id')->orWhere('program_studi_id', $f['program_studi_id']));
+        }
+        if (! empty($f['q'])) {
+            $q->where('judul', 'like', '%' . $f['q'] . '%');
+        }
+        $q->orderBy('mulai_at')->orderBy('id');
+        $lebih = false;
+        $minggu = [];
+        $daftar = null;
+        if ($f['tampilan'] === 'daftar') {
+            $daftar = $q->paginate(25)->withQueryString();
+        } else {
+            $items = $q->limit(501)->get();
+            $lebih = $items->count() > 500;
+            // Jika terlalu padat, jangan menampilkan kalender parsial yang menyesatkan.
+            if (! $lebih) {
+                $minggu = $grid->susun($items, $bulan);
+            }
+        }
+        return view('kalender_akademik.index', [
+            'filter' => $f,
+            'bulan' => $bulan,
+            'minggu' => $minggu,
+            'daftar' => $daftar,
+            'lebih' => $lebih,
+            'periode' => DB::table('periode_akademik')->orderByDesc('id')->get(['id', 'kode']),
+            'prodi' => DB::table('program_studi')->orderBy('nama')->get(['id', 'nama']),
+            'kelola' => $akses->kelola($r->user())
+        ]);
+    }
+    public function create(): View
+    {
+        Gate::authorize('create', KalenderAkademik::class);
+        return view('kalender_akademik.create', $this->pilihan(new KalenderAkademik()) + ['token' => (string) Str::uuid()]);
+    }
+    public function store(KalenderAkademikRequest $r, KelolaKalenderAkademik $aksi): RedirectResponse
+    {
+        $k = $aksi->buat($r->user()->id, $r->all());
+        return redirect()->route('kalender.show', $k)->with('info', 'Draf agenda tersimpan. Terbitkan setelah diperiksa.');
+    }
+    public function show(Request $r, KalenderAkademik $kalenderAkademik): View
+    {
+        Gate::authorize('view', $kalenderAkademik);
+        $r->validate(['page' => ['nullable', 'integer', 'between:1,100000']]);
+        $kalenderAkademik->load(['periodeAkademik', 'programStudi']);
+        $audit = Gate::allows('audit', $kalenderAkademik) ? $kalenderAkademik->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(10) : null;
+        return view('kalender_akademik.show', ['agenda' => $kalenderAkademik, 'audit' => $audit]);
+    }
+    public function edit(KalenderAkademik $kalenderAkademik): View
+    {
+        Gate::authorize('update', $kalenderAkademik);
+        return view('kalender_akademik.edit', $this->pilihan($kalenderAkademik));
+    }
+    public function update(KalenderAkademikRequest $r, KalenderAkademik $kalenderAkademik, KelolaKalenderAkademik $aksi): RedirectResponse
+    {
+        $k = $aksi->ubah($r->user()->id, $kalenderAkademik, $r->all());
+        return redirect()->route('kalender.show', $k)->with('info', 'Agenda tersimpan. Perubahan agenda terbit langsung terlihat pengguna.');
+    }
+    public function tindakan(KalenderAkademikStatusRequest $r, KalenderAkademik $kalenderAkademik, KelolaKalenderAkademik $aksi): RedirectResponse
+    {
+        $v = AturanKalender::tindakan($r->all());
+        Gate::authorize($v['aksi'], $kalenderAkademik);
+        $k = $aksi->tindakan($r->user()->id, $kalenderAkademik, $v);
+        return redirect()->route('kalender.show', $k)->with('info', 'Status agenda: ' . KalenderAkademik::STATUS[$k->status] . '.');
+    }
+    private function pilihan(KalenderAkademik $agenda): array
+    {
+        return [
+            'agenda' => $agenda,
+            'periode' => DB::table('periode_akademik')->where(fn($q) => $q->whereIn('status', ['persiapan', 'aktif'])->orWhere('id', $agenda->periode_akademik_id))
+                ->orderByDesc('id')->get(['id', 'kode', 'status']),
+            'prodi' => DB::table('program_studi')->where(fn($q) => $q->where('aktif', true)->orWhere('id', $agenda->program_studi_id))
+                ->orderBy('nama')->get(['id', 'nama', 'aktif'])
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\PengumumanController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaPengumuman;
+use App\Http\Requests\PengumumanRequest;
+use App\Http\Requests\PengumumanStatusRequest;
+use App\Models\Pengumuman;
+use App\Services\AksesMateri;
+use App\Services\AksesPengumuman;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+
+class PengumumanController extends Controller
+{
+    public function index(Request $r, AksesPengumuman $akses): View
+    {
+        Gate::authorize('viewAny', Pengumuman::class);
+        $f = $r->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'mode' => ['nullable', Rule::in(['bacaan', 'kelola'])],
+            'status' => ['nullable', Rule::in(array_keys(Pengumuman::STATUS))],
+            'page' => ['nullable', 'integer', 'between:1,100000']
+        ]);
+        $mode = $f['mode'] ?? 'bacaan';
+        if ($mode === 'kelola') {
+            Gate::authorize('create', Pengumuman::class);
+        }
+        $q = $mode === 'kelola' ? $akses->kelola(Pengumuman::query(), $r->user()) : $akses->bacaan(Pengumuman::query(), $r->user());
+        if (! empty($f['q'])) {
+            $q->where('judul', 'like', '%' . $f['q'] . '%');
+        }
+        if ($mode === 'kelola' && ! empty($f['status'])) {
+            $q->where('status', $f['status']);
+        }
+        return view('pengumuman.index', ['daftar' => $q->with('pembuat:id,nama')->orderByDesc('id')->paginate(20)->withQueryString(), 'filter' => $f, 'mode' => $mode]);
+    }
+    public function create(Request $r): View
+    {
+        Gate::authorize('create', Pengumuman::class);
+        return view('pengumuman.create', $this->pilihan($r, new Pengumuman()) + ['token' => (string) Str::uuid()]);
+    }
+    public function store(PengumumanRequest $r, KelolaPengumuman $aksi): RedirectResponse
+    {
+        $p = $aksi->buat($r->user()->id, $r->all());
+        return redirect()->route('pengumuman.show', $p)->with('info', 'Draf tersimpan. Periksa sasaran sebelum menerbitkan.');
+    }
+    public function show(Request $r, Pengumuman $pengumuman, AksesPengumuman $akses): View
+    {
+        // 404 untuk detail yang tidak boleh dibaca, tanpa membocorkan keberadaan judul.
+        abort_unless($akses->membaca($r->user(), $pengumuman), 404);
+        $r->validate(['page' => ['nullable', 'integer', 'between:1,100000']]);
+        $kelola = $akses->mengelola($r->user(), $pengumuman);
+        $pengumuman->load('pembuat:id,nama');
+        if ($kelola) {
+            $pengumuman->load(['sasaran.programStudi', 'sasaran.kelasKuliah', 'sasaran.role']);
+        }
+        return view('pengumuman.show', [
+            'item' => $pengumuman,
+            'kelola' => $kelola,
+            'audit' => $kelola ? $pengumuman->audits()->with('pelaku')->orderByDesc('versi_entitas')->paginate(10) : null
+        ]);
+    }
+    public function edit(Request $r, Pengumuman $pengumuman): View
+    {
+        Gate::authorize('update', $pengumuman);
+        return view('pengumuman.edit', $this->pilihan($r, $pengumuman));
+    }
+    public function update(PengumumanRequest $r, Pengumuman $pengumuman, KelolaPengumuman $aksi): RedirectResponse
+    {
+        $p = $aksi->ubah($r->user()->id, $pengumuman, $r->all());
+        return redirect()->route('pengumuman.show', $p)->with('info', 'Draf tersimpan.');
+    }
+    public function tindakan(PengumumanStatusRequest $r, Pengumuman $pengumuman, KelolaPengumuman $aksi): RedirectResponse
+    {
+        $p = $aksi->tindakan($r->user()->id, $pengumuman, $r->all());
+        return redirect()->route('pengumuman.show', $p)->with('info', 'Status: ' . Pengumuman::STATUS[$p->status] . '.');
+    }
+    private function pilihan(Request $r, Pengumuman $p): array
+    {
+        $v = $r->validate(['q_kelas' => ['nullable', 'string', 'max:100']]);
+        $p->load('sasaran');
+        $akses = app(AksesPengumuman::class);
+        $admin = $akses->admin($r->user());
+        $q = app(AksesMateri::class)->kelasKelola($r->user());
+        $selected = $p->sasaran->pluck('kelas_kuliah_id')->filter()->all();
+        $old = $r->old('sasaran', []);
+        if (is_array($old)) {
+            foreach (array_slice($old, 0, 10) as $s) {
+                if (is_array($s) && isset($s['kelas_kuliah_id']) && is_scalar($s['kelas_kuliah_id']) && ctype_digit((string) $s['kelas_kuliah_id'])) {
+                    $selected[] = (int) $s['kelas_kuliah_id'];
+                }
+            }
+        }
+        $terpilih = (clone $q)->whereIn('kelas_kuliah.id', $selected)->get(['kelas_kuliah.id', 'kode', 'nama_mk_snapshot', 'status']);
+        $q->whereIn('kelas_kuliah.status', ['persiapan', 'aktif'])->whereHas('rombel.periodeAkademik', fn($b) => $b->where('status', 'aktif'));
+        if (! empty($v['q_kelas'])) {
+            $q->where(fn($b) => $b->where('kode', 'like', '%' . $v['q_kelas'] . '%')->orWhere('nama_mk_snapshot', 'like', '%' . $v['q_kelas'] . '%'));
+        }
+        $hasil = $q->orderBy('kode')->limit(101)->get(['kelas_kuliah.id', 'kode', 'nama_mk_snapshot', 'status']);
+        return [
+            'item' => $p,
+            'admin' => $admin,
+            'qKelas' => $v['q_kelas'] ?? '',
+            'lebihKelas' => $hasil->count() > 100,
+            'kelas' => $terpilih->merge($hasil->take(100))->unique('id')->sortBy('kode'),
+            'prodi' => $admin ? DB::table('program_studi')->where(fn($b) => $b->where('aktif', true)->orWhereIn('id', $p->sasaran->pluck('program_studi_id')->filter()))->orderBy('nama')->get(['id', 'nama', 'aktif']) : collect(),
+            'roles' => DB::table('roles')->whereIn('kode', $admin ? AksesPengumuman::ROLES : ['dosen', 'mahasiswa'])->orderBy('kode')->get(['id', 'kode'])
+        ];
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\NotifikasiController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Actions\KelolaNotifikasi;
+use App\Http\Requests\NotifikasiRequest;
+use App\Models\Notifikasi;
+use App\Services\{AksesNotifikasi, SumberNotifikasi};
+use Illuminate\Http\{Request, RedirectResponse};
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+
+class NotifikasiController extends Controller
+{
+    public function index(Request $r, AksesNotifikasi $akses, SumberNotifikasi $sumber): View
+    {
+        Gate::authorize('viewAny', Notifikasi::class);
+        $v = $r->validate([
+            'status' => ['nullable', Rule::in(['semua', 'belum', 'sudah'])],
+            'jenis' => ['nullable', Rule::in($sumber->aktif())],
+            'page' => ['nullable', 'integer', 'between:1,100000']
+        ]);
+        $base = $akses->batasi(Notifikasi::query(), $r->user());
+        $belum = (clone $base)->whereNull('dibaca_at')->count();
+        if (($v['status'] ?? '') === 'belum') {
+            $base->whereNull('dibaca_at');
+        }
+        if (($v['status'] ?? '') === 'sudah') {
+            $base->whereNotNull('dibaca_at');
+        }
+        if (! empty($v['jenis'])) {
+            $base->where('jenis', $v['jenis']);
+        }
+        return view('notifikasi.index', [
+            'daftar' => $base->orderByDesc('id')->paginate(20)->withQueryString(),
+            'belum' => $belum,
+            'filter' => $v,
+            'jenisAktif' => $sumber->aktif()
+        ]);
+    }
+    public function baca(NotifikasiRequest $r, Notifikasi $notifikasi, KelolaNotifikasi $aksi): RedirectResponse
+    {
+        $aksi->baca((int) $r->user()->id, (int) $notifikasi->id);
+        return redirect()->route('notifikasi.index')->with('info', 'Notifikasi ditandai sudah dibaca.');
+    }
+    public function buka(NotifikasiRequest $r, Notifikasi $notifikasi, KelolaNotifikasi $aksi): RedirectResponse
+    {
+        $tujuan = $aksi->baca((int) $r->user()->id, (int) $notifikasi->id, true);
+        return redirect()->to($tujuan);
+    }
+    public function bacaHalaman(NotifikasiRequest $r, KelolaNotifikasi $aksi): RedirectResponse
+    {
+        $jumlah = $aksi->bacaHalaman((int) $r->user()->id, $r->validated());
+        return redirect()->route('notifikasi.index')->with('info', "{$jumlah} notifikasi ditandai sudah dibaca.");
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\PermohonanSuratAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaPermohonanSurat;
+use App\Models\Berkas;
+use App\Models\PermohonanSurat;
+use App\Models\User;
+use App\Services\BerkasSurat;
+use App\Services\PrivasiBuktiPembayaran;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Validation\ValidationException;
+use LogicException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+
+class PermohonanSuratAksesTest extends SuratDatabaseTestCase
+{
+    public function test_pengajuan_mencatat_snapshot_riwayat_dan_audit(): void
+    {
+        $p = $this->ajukanSurat(['lampiran_berkas_id' => 11]);
+        $this->assertSame('diajukan', $p->status);
+        $this->assertSame('M001', $p->akademik_snapshot['nim']);
+        $this->assertSame(1, $p->riwayat()->count());
+        $this->assertSame(1, $p->audits()->count());
+        $this->assertSame(11, $p->lampiran_snapshot['id']);
+        $this->assertNotNull($p->slot_aktif);
+    }
+    public function test_token_pengajuan_berulang_tidak_menduplikasi(): void
+    {
+        $a = app(KelolaPermohonanSurat::class);
+        $v = $this->dataSurat();
+        $p = $a->ajukan(4, $v);
+        $this->assertSame($p->id, $a->ajukan(4, $v)->id);
+        $this->assertSame(1, PermohonanSurat::count());
+        $this->assertSame(1, $p->riwayat()->count());
+    }
+    public function test_token_sama_isi_berbeda_ditolak(): void
+    {
+        $v = $this->dataSurat();
+        $a = app(KelolaPermohonanSurat::class);
+        $a->ajukan(4, $v);
+        $v['keperluan'] = 'Keperluan baru yang berbeda.';
+        $this->expectException(ValidationException::class);
+        $a->ajukan(4, $v);
+    }
+    public function test_permohonan_aktif_ganda_ditolak(): void
+    {
+        $this->ajukanSurat();
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat();
+    }
+    public function test_registrasi_mahasiswa_lain_ditolak(): void
+    {
+        try {
+            $this->ajukanSurat(['registrasi_semester_id' => 2]);
+            $this->fail('Harus ditolak.');
+        } catch (HttpException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+            $this->assertSame(0, PermohonanSurat::count());
+        }
+    }
+    public function test_registrasi_cuti_ditolak(): void
+    {
+        DB::table('registrasi_semester')->where('id', 1)->update(['status' => 'cuti']);
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat();
+    }
+    public function test_periode_tidak_aktif_ditolak(): void
+    {
+        DB::table('periode_akademik')->where('id', 1)->update(['status' => 'arsip']);
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat();
+    }
+    public function test_jenis_nonaktif_ditolak(): void
+    {
+        DB::table('jenis_surat')->where('id', 1)->update(['aktif' => false]);
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat();
+    }
+    public function test_form_jenis_lama_ditolak(): void
+    {
+        $v = $this->dataSurat();
+        DB::table('jenis_surat')->where('id', 1)->increment('revisi');
+        $this->expectException(ValidationException::class);
+        app(KelolaPermohonanSurat::class)->ajukan(4, $v);
+    }
+    public function test_lampiran_milik_orang_lain_ditolak(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat(['lampiran_berkas_id' => 12]);
+    }
+    public function test_lampiran_pembelajaran_ditolak(): void
+    {
+        DB::table('materi_berkas')->insert(['berkas_id' => 11]);
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat(['lampiran_berkas_id' => 11]);
+    }
+    public function test_bukti_pembayaran_ditolak_sebagai_lampiran(): void
+    {
+        DB::table('pembayaran')->insert(['bukti_berkas_id' => 11]);
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat(['lampiran_berkas_id' => 11]);
+    }
+    public function test_dokumen_surat_ditolak_sebagai_bukti_pembayaran(): void
+    {
+        $this->ajukanSurat(['lampiran_berkas_id' => 11]);
+        $this->expectException(ValidationException::class);
+        DB::transaction(fn() => PrivasiBuktiPembayaran::khususKeuangan(Berkas::whereKey(11)->lockForUpdate()->firstOrFail()));
+    }
+    public function test_berkas_rusak_ditolak_sebelum_pengajuan(): void
+    {
+        $b = Berkas::findOrFail(11);
+        Storage::disk('berkas_local')->put($b->object_key, str_repeat('X', $b->ukuran_byte));
+        $this->expectException(ValidationException::class);
+        $this->ajukanSurat(['lampiran_berkas_id' => 11]);
+    }
+    public function test_mahasiswa_hanya_melihat_permohonan_sendiri(): void
+    {
+        $p = $this->ajukanSurat();
+        $lain = $this->ajukanSurat(['registrasi_semester_id' => 2], 3);
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('surat.index'))->assertOk()->assertSee($p->nomor_pengajuan)->assertDontSee($lain->nomor_pengajuan);
+        $this->get(route('surat.show', $lain))->assertForbidden();
+    }
+    public function test_keuangan_saja_tidak_masuk_portal_surat(): void
+    {
+        $this->actingAs(User::findOrFail(2), 'web')->get(route('surat.index'))->assertForbidden();
+    }
+    public function test_mahasiswa_tidak_dapat_memproses(): void
+    {
+        $p = $this->ajukanSurat();
+        $this->actingAs(User::findOrFail(4), 'web')->postJson(route('surat.tindakan', $p), $this->dataTindakan($p, 'diproses'))->assertForbidden();
+        $this->assertSame('diajukan', $p->fresh()->status);
+    }
+    public function test_peran_petugas_dicabut_diperiksa_ulang(): void
+    {
+        $p = $this->ajukanSurat();
+        DB::table('user_roles')->where('user_id', 1)->delete();
+        try {
+            $this->tindakanSurat($p, 'diproses');
+            $this->fail('Harus ditolak.');
+        } catch (HttpException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+            $this->assertSame('diajukan', $p->fresh()->status);
+        }
+    }
+    public function test_pemohon_boleh_batal_sebelum_diproses(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'dibatalkan', [], 4);
+        $this->assertNull($p->slot_aktif);
+        $this->assertSame(2, $p->riwayat()->count());
+        $this->assertNotSame($p->id, $this->ajukanSurat()->id);
+    }
+    public function test_pemohon_tidak_boleh_batal_setelah_diproses(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'diproses');
+        $this->actingAs(User::findOrFail(4), 'web')->postJson(route('surat.tindakan', $p), $this->dataTindakan($p, 'dibatalkan'))->assertForbidden();
+    }
+    public function test_penolakan_menyimpan_alasan_dan_membuka_pengajuan_baru(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'ditolak', ['catatan' => 'Tujuan permohonan belum jelas.']);
+        $this->assertSame('ditolak', $p->status);
+        $this->assertSame('Tujuan permohonan belum jelas.', $p->riwayat()->orderByDesc('id')->first()->catatan);
+        $this->assertNotSame($p->id, $this->ajukanSurat()->id);
+    }
+    public function test_penerbitan_mencatat_nomor_pdf_riwayat_dan_audit(): void
+    {
+        $p = $this->terbitkanSurat();
+        $this->assertSame('terbit', $p->status);
+        $this->assertSame(13, $p->hasil_berkas_id);
+        $this->assertSame('001/ILYAS/IX/2026', $p->nomor_surat);
+        $this->assertNull($p->slot_aktif);
+        $this->assertSame(3, $p->riwayat()->count());
+        $this->assertSame(3, $p->audits()->count());
+    }
+    public function test_penerbitan_memerlukan_registrasi_masih_aktif(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'diproses');
+        DB::table('registrasi_semester')->where('id', 1)->update(['status' => 'cuti']);
+        $this->expectException(ValidationException::class);
+        $this->tindakanSurat($p, 'terbit');
+    }
+    public function test_perubahan_nama_mahasiswa_menghalangi_penerbitan_snapshot_lama(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'diproses');
+        DB::table('users')->where('id', 4)->update(['nama' => 'Nama diperbaiki']);
+        $this->expectException(ValidationException::class);
+        $this->tindakanSurat($p, 'terbit');
+    }
+    public function test_nonaktif_katalog_tidak_menghapus_permohonan_lama(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'diproses');
+        DB::table('jenis_surat')->where('id', 1)->update(['aktif' => false, 'syarat' => 'Syarat baru']);
+        $p = $this->tindakanSurat($p, 'terbit');
+        $this->assertSame('terbit', $p->status);
+        $this->assertSame('Tujuan penggunaan surat.', $p->jenis_snapshot['syarat']);
+    }
+    public function test_pdf_final_harus_milik_petugas_penerbit(): void
+    {
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'diproses');
+        $this->expectException(ValidationException::class);
+        $this->tindakanSurat($p, 'terbit', ['hasil_berkas_id' => 14]);
+    }
+    public function test_nomor_surat_tidak_boleh_dipakai_ulang(): void
+    {
+        $this->terbitkanSurat();
+        $p = $this->tindakanSurat($this->ajukanSurat(), 'diproses');
+        $this->expectException(ValidationException::class);
+        $this->tindakanSurat($p, 'terbit', ['hasil_berkas_id' => 16]);
+    }
+    public function test_form_lama_ditolak_tanpa_riwayat_tambahan(): void
+    {
+        $p = $this->ajukanSurat();
+        $versi = $p->versiForm();
+        $p = $this->tindakanSurat($p, 'diproses');
+        try {
+            $this->tindakanSurat($p, 'ditolak', ['versi' => $versi]);
+            $this->fail('Harus ditolak.');
+        } catch (ValidationException) {
+            $this->assertSame(2, $p->riwayat()->count());
+            $this->assertSame('diproses', $p->fresh()->status);
+        }
+    }
+    public function test_pencabutan_menyimpan_nomor_hasil_dan_memblokir_unduhan(): void
+    {
+        $p = $this->terbitkanSurat();
+        $url = $this->urlHasil($p);
+        $p = $this->tindakanSurat($p, 'dibatalkan');
+        $this->assertSame(13, $p->hasil_berkas_id);
+        $this->assertNotNull($p->nomor_surat);
+        $this->assertSame(4, $p->riwayat()->count());
+        $this->actingAs(User::findOrFail(4), 'web')->get($url)->assertForbidden();
+    }
+    public function test_pemilik_dapat_mengunduh_hasil_dengan_tautan_terikat_akun(): void
+    {
+        $p = $this->terbitkanSurat();
+        $url = $this->urlHasil($p);
+        $this->actingAs(User::findOrFail(4), 'web')->get($url)->assertOk()->assertDownload();
+        $this->actingAs(User::findOrFail(1), 'web')->get($url)->assertForbidden();
+        $this->actingAs(User::findOrFail(3), 'web')->get($url)->assertForbidden();
+    }
+    public function test_tautan_kedaluwarsa_ditolak(): void
+    {
+        $p = $this->terbitkanSurat();
+        $url = $this->urlHasil($p, -1);
+        $this->actingAs(User::findOrFail(4), 'web')->get($url)->assertForbidden();
+    }
+    public function test_unduhan_isi_rusak_tidak_mengirim_dokumen(): void
+    {
+        $p = $this->terbitkanSurat();
+        $b = Berkas::findOrFail(13);
+        Storage::disk('berkas_local')->put($b->object_key, str_repeat('X', $b->ukuran_byte));
+        $this->actingAs(User::findOrFail(4), 'web')->get($this->urlHasil($p))->assertStatus(503);
+    }
+    public function test_kegagalan_audit_membatalkan_status_dan_riwayat(): void
+    {
+        $p = $this->ajukanSurat();
+        DB::table('audit_log')->insert([
+            'entitas' => 'permohonan_surat',
+            'entitas_id' => $p->id,
+            'versi_entitas' => 2,
+            'aksi' => 'fixture',
+            'sesudah' => '{}',
+            'waktu' => now('UTC')
+        ]);
+        try {
+            $this->tindakanSurat($p, 'diproses');
+            $this->fail('Audit harus gagal.');
+        } catch (QueryException) {
+            $this->assertSame('diajukan', $p->fresh()->status);
+            $this->assertSame(1, $p->riwayat()->count());
+        }
+    }
+    public function test_riwayat_tidak_dapat_diedit(): void
+    {
+        $r = $this->ajukanSurat()->riwayat()->firstOrFail();
+        $this->expectException(LogicException::class);
+        DB::transaction(function () use ($r): void {
+            $r->catatan = 'Mengganti catatan lama.';
+            $r->save();
+        });
+    }
+    public function test_pengajuan_tidak_dapat_dihapus(): void
+    {
+        $p = $this->ajukanSurat();
+        $this->expectException(LogicException::class);
+        $p->delete();
+    }
+    public function test_halaman_form_dan_detail_menggunakan_escaping(): void
+    {
+        $p = $this->ajukanSurat(['keperluan' => '<script>alert(1)</script>']);
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('surat.create'))->assertOk();
+        $this->get(route('surat.show', $p))->assertOk()->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', false)->assertDontSee('<script>alert(1)</script>', false);
+        $p = $this->tindakanSurat($p, 'diproses');
+        $this->actingAs(User::findOrFail(1), 'web')->get(route('surat.show', $p))->assertOk()->assertSee('hasil_berkas_id');
+    }
+    public function test_snapshot_berkas_tidak_bergantung_urutan_kunci_json(): void
+    {
+        $b = Berkas::findOrFail(11);
+        $s = array_reverse(BerkasSurat::snapshot($b), true);
+        $this->assertTrue(BerkasSurat::cocok($b, $s));
+    }
+    public function test_perintah_integritas_menemukan_riwayat_hilang(): void
+    {
+        $p = $this->terbitkanSurat();
+        $this->artisan('surat:periksa-riwayat')->assertExitCode(0);
+        DB::table('riwayat_surat')->where('permohonan_surat_id', $p->id)->where('revisi_permohonan', 2)->delete();
+        $this->artisan('surat:periksa-riwayat')->assertExitCode(1);
+    }
+    public function test_admin_tidak_memproses_permohonan_dirinya_sendiri(): void
+    {
+        $p = $this->ajukanSurat();
+        DB::table('user_roles')->insert(['user_id' => 4, 'role_id' => 1]);
+        $this->actingAs(User::findOrFail(4), 'web')->postJson(route('surat.tindakan', $p), $this->dataTindakan($p, 'diproses'))->assertForbidden();
+    }
+    public function test_berkas_surat_tidak_dapat_ditautkan_ke_pembelajaran(): void
+    {
+        $this->ajukanSurat(['lampiran_berkas_id' => 11]);
+        $lampiran = new class extends \Illuminate\Database\Eloquent\Model {
+            use \App\Models\Concerns\MenjagaBuktiPembayaranPrivat;
+            protected $table = 'materi_berkas';
+            public $timestamps = false;
+        };
+        $lampiran->berkas_id = 11;
+        $this->expectException(ValidationException::class);
+        DB::transaction(fn() => $lampiran->save());
+    }
+    private function urlHasil(PermohonanSurat $p, int $menit = 2): string
+    {
+        return URL::temporarySignedRoute('surat.unduh', now()->addMinutes($menit), [
+            'permohonanSurat' => $p->id,
+            'bagian' => 'hasil',
+            'pemohon' => 4,
+            'versi' => $p->revisi,
+            'versi_berkas' => 2
+        ]);
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\KalenderAkademikAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaKalenderAkademik;
+use App\Models\KalenderAkademik;
+use App\Models\User;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use LogicException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+
+class KalenderAkademikAksesTest extends KalenderDatabaseTestCase
+{
+    public function test_buat_draf_dengan_audit_dan_waktu_utc(): void
+    {
+        $k = $this->buatAgenda();
+        $this->assertSame('draf', $k->status);
+        $this->assertSame(1, $k->audits()->count());
+        $this->assertSame('2026-09-20 00:00:00', $k->mulai_at->format('Y-m-d H:i:s'));
+        $this->assertNull($k->diterbitkan_at);
+    }
+    public function test_pengiriman_ulang_tidak_menduplikasi(): void
+    {
+        $a = app(KelolaKalenderAkademik::class);
+        $v = $this->dataAgenda();
+        $k = $a->buat(1, $v);
+        $this->assertSame($k->id, $a->buat(1, $v)->id);
+        $this->assertSame(1, KalenderAkademik::count());
+    }
+    public function test_token_sama_isi_berbeda_ditolak(): void
+    {
+        $a = app(KelolaKalenderAkademik::class);
+        $v = $this->dataAgenda();
+        $a->buat(1, $v);
+        $v['judul'] = 'Judul berbeda';
+        $this->expectException(ValidationException::class);
+        $a->buat(1, $v);
+    }
+    public function test_keuangan_dosen_mahasiswa_tidak_boleh_menulis(): void
+    {
+        foreach ([2, 3, 4, 5] as $id) {
+            try {
+                app(KelolaKalenderAkademik::class)->buat($id, $this->dataAgenda());
+                $this->fail('Harus ditolak.');
+            } catch (HttpException $e) {
+                $this->assertSame(403, $e->getStatusCode());
+            }
+        }
+        $this->assertSame(0, KalenderAkademik::count());
+    }
+    public function test_draf_tidak_bocor_di_daftar_dan_url_langsung(): void
+    {
+        $k = $this->buatAgenda();
+        $this->actingAs(User::findOrFail(4), 'web');
+        $this->get(route('kalender.index', ['bulan' => '2026-09', 'tampilan' => 'daftar']))->assertOk()->assertDontSee($k->judul);
+        $this->get(route('kalender.show', $k))->assertForbidden();
+    }
+    public function test_publikasi_terlihat_semua_peran_kampus_aktif(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(['program_studi_id' => 1]), 'terbitkan');
+        foreach ([1, 2, 3, 4] as $id) {
+            $this->actingAs(User::findOrFail($id), 'web')->get(route('kalender.show', $k))->assertOk();
+        }
+        $this->assertSame(2, $k->audits()->count());
+    }
+    public function test_akun_nonaktif_ditolak_membaca(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(), 'terbitkan');
+        $this->actingAs(User::findOrFail(5), 'web')->get(route('kalender.show', $k))->assertForbidden();
+    }
+    public function test_pembatalan_agenda_terbit_tetap_terlihat(): void
+    {
+        $k = $this->tindakanAgenda($this->tindakanAgenda($this->buatAgenda(), 'terbitkan'), 'batalkan');
+        $this->assertNotNull($k->diterbitkan_at);
+        $this->assertNotNull($k->dibatalkan_at);
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('kalender.show', $k))->assertOk()->assertSee('Agenda dibatalkan.');
+    }
+    public function test_pembatalan_draf_tetap_tersembunyi(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(), 'batalkan');
+        $this->assertNull($k->diterbitkan_at);
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('kalender.show', $k))->assertForbidden();
+    }
+    public function test_agenda_batal_tidak_dapat_diedit(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(), 'batalkan');
+        $this->expectException(ValidationException::class);
+        app(KelolaKalenderAkademik::class)->ubah(1, $k, $this->dataEdit($k, ['judul' => 'Penggantian nama']));
+    }
+    public function test_koreksi_agenda_terbit_menaikkan_revisi_dan_audit(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(), 'terbitkan');
+        $awalTerbit = $k->diterbitkan_at->toISOString();
+        $k = app(KelolaKalenderAkademik::class)->ubah(1, $k, $this->dataEdit($k, ['judul' => 'Judul yang diperbaiki']));
+        $this->assertSame(3, $k->revisi);
+        $this->assertSame(3, $k->audits()->count());
+        $this->assertSame($awalTerbit, $k->diterbitkan_at->toISOString());
+    }
+    public function test_periode_dan_sasaran_tetap_setelah_publikasi(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(), 'terbitkan');
+        $this->expectException(ValidationException::class);
+        app(KelolaKalenderAkademik::class)->ubah(1, $k, $this->dataEdit($k, ['program_studi_id' => 1]));
+    }
+    public function test_periode_arsip_menghalangi_penerbitan(): void
+    {
+        $k = $this->buatAgenda();
+        DB::table('periode_akademik')->where('id', 1)->update(['status' => 'arsip']);
+        $this->expectException(ValidationException::class);
+        $this->tindakanAgenda($k, 'terbitkan');
+    }
+    public function test_periode_arsip_tetap_boleh_pembatalan(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(), 'terbitkan');
+        DB::table('periode_akademik')->where('id', 1)->update(['status' => 'arsip']);
+        $this->assertSame('batal', $this->tindakanAgenda($k, 'batalkan')->status);
+    }
+    public function test_prodi_nonaktif_ditolak(): void
+    {
+        DB::table('program_studi')->where('id', 1)->update(['aktif' => false]);
+        $this->expectException(ValidationException::class);
+        $this->buatAgenda(['program_studi_id' => 1]);
+    }
+    public function test_form_lama_tidak_menimpa_perubahan(): void
+    {
+        $k = $this->buatAgenda();
+        $v = $this->dataEdit($k);
+        $this->tindakanAgenda($k, 'terbitkan');
+        $this->expectException(ValidationException::class);
+        app(KelolaKalenderAkademik::class)->ubah(1, $k, $v);
+    }
+    public function test_penyimpanan_tanpa_perubahan_tidak_menambah_audit(): void
+    {
+        $k = $this->buatAgenda();
+        $k = app(KelolaKalenderAkademik::class)->ubah(1, $k, $this->dataEdit($k));
+        $this->assertSame(1, $k->revisi);
+        $this->assertSame(1, $k->audits()->count());
+    }
+    public function test_peran_dicabut_diperiksa_ulang(): void
+    {
+        $k = $this->buatAgenda();
+        DB::table('user_roles')->where('user_id', 1)->delete();
+        try {
+            $this->tindakanAgenda($k, 'terbitkan');
+            $this->fail('Harus ditolak.');
+        } catch (HttpException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+            $this->assertSame('draf', $k->fresh()->status);
+        }
+    }
+    public function test_audit_gagal_membatalkan_perubahan(): void
+    {
+        $k = $this->buatAgenda();
+        DB::table('audit_log')->insert(['entitas' => 'kalender_akademik', 'entitas_id' => $k->id, 'versi_entitas' => 2, 'aksi' => 'fixture', 'sesudah' => '{}', 'waktu' => now('UTC')]);
+        try {
+            $this->tindakanAgenda($k, 'terbitkan');
+            $this->fail('Audit harus gagal.');
+        } catch (QueryException) {
+            $this->assertSame('draf', $k->fresh()->status);
+            $this->assertSame(1, $k->fresh()->revisi);
+        }
+    }
+    public function test_agenda_krs_tidak_mengubah_batas_krs_periode(): void
+    {
+        $awal = (array) DB::table('periode_akademik')->where('id', 1)->first();
+        $k = $this->tindakanAgenda($this->buatAgenda(['jenis' => 'krs', 'mulai_lokal' => '2026-08-01T08:00', 'selesai_lokal' => '2026-08-20T23:00']), 'terbitkan');
+        $this->assertSame($awal, (array) DB::table('periode_akademik')->where('id', 1)->first());
+        $this->assertSame('terbit', $k->status);
+    }
+    public function test_filter_prodi_menyertakan_agenda_kampus(): void
+    {
+        foreach ([[null, 'Agenda kampus'], [1, 'Agenda prodi satu'], [2, 'Agenda prodi dua']] as [$id, $judul]) {
+            $this->tindakanAgenda($this->buatAgenda(['judul' => $judul, 'program_studi_id' => $id]), 'terbitkan');
+        }
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('kalender.index', ['bulan' => '2026-09', 'tampilan' => 'daftar', 'program_studi_id' => 1]))
+            ->assertOk()->assertSee('Agenda kampus')->assertSee('Agenda prodi satu')->assertDontSee('Agenda prodi dua');
+    }
+    public function test_agenda_lintas_bulan_muncul_di_bulan_berikutnya(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(['mulai_lokal' => '2026-08-31T23:00', 'selesai_lokal' => '2026-09-01T01:00']), 'terbitkan');
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('kalender.index', ['bulan' => '2026-09', 'tampilan' => 'daftar']))->assertOk()->assertSee($k->judul);
+    }
+    public function test_akhir_tepat_awal_bulan_tidak_muncul_di_bulan_baru(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(['mulai_lokal' => '2026-08-31T23:00', 'selesai_lokal' => '2026-09-01T00:00']), 'terbitkan');
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('kalender.index', ['bulan' => '2026-09', 'tampilan' => 'daftar']))->assertOk()->assertDontSee($k->judul);
+    }
+    public function test_hard_delete_dilarang(): void
+    {
+        $k = $this->buatAgenda();
+        $this->expectException(LogicException::class);
+        $k->delete();
+    }
+    public function test_keterangan_html_di_escape_dan_audit_tidak_terlihat_mahasiswa(): void
+    {
+        $k = $this->tindakanAgenda($this->buatAgenda(['keterangan' => '<script>alert(1)</script>']), 'terbitkan');
+        $this->actingAs(User::findOrFail(4), 'web')->get(route('kalender.show', $k))->assertOk()->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', false)
+            ->assertDontSee('<script>alert(1)</script>', false)->assertDontSee('Audit admin');
+    }
+    public function test_form_dan_grid_dapat_dirender(): void
+    {
+        $k = $this->buatAgenda();
+        $this->actingAs(User::findOrFail(1), 'web');
+        $this->get(route('kalender.create'))->assertOk();
+        $this->get(route('kalender.edit', $k))->assertOk();
+        $this->get(route('kalender.index', ['bulan' => '2026-09']))->assertOk()->assertSee('Senin')->assertSee($k->judul);
+    }
+    public function test_tindakan_tanpa_konfirmasi_ditolak(): void
+    {
+        $k = $this->buatAgenda();
+        $this->actingAs(User::findOrFail(1), 'web')->postJson(
+            route('kalender.tindakan', $k),
+            ['aksi' => 'terbitkan', 'versi' => $k->versiForm(), 'alasan' => 'Menerbitkan agenda kampus.']
+        )->assertUnprocessable()->assertJsonValidationErrors('konfirmasi');
+        $this->assertSame('draf', $k->fresh()->status);
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\PengumumanAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaPengumuman;
+use App\Models\Pengumuman;
+use App\Models\SasaranPengumuman;
+use App\Models\User;
+use App\Services\AksesPengumuman;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+
+class PengumumanAksesTest extends PengumumanDatabaseTestCase
+{
+    public function test_draf_tidak_terlihat_pembaca(): void
+    {
+        $p = $this->draf();
+        $this->assertFalse($this->terlihat(4, $p));
+        $this->actingAs(User::findOrFail(4))->get(route('pengumuman.show', $p))->assertNotFound();
+    }
+    public function test_kampus_terbit_terlihat_semua_peran_valid(): void
+    {
+        $p = $this->terbit($this->draf());
+        foreach ([1, 2, 3, 4] as $id) {
+            $this->assertTrue($this->terlihat($id, $p));
+        }
+    }
+    public function test_akun_nonaktif_ditolak(): void
+    {
+        $p = $this->terbit($this->draf());
+        $this->assertFalse($this->terlihat(5, $p));
+        DB::table('users')->where('id', 4)->update(['status' => 'nonaktif']);
+        $this->assertFalse($this->terlihat(4, $p));
+    }
+    public function test_sasaran_prodi_tidak_bocor_ke_prodi_lain(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('prodi', 1)]]));
+        $this->assertTrue($this->terlihat(4, $p));
+        $this->assertTrue($this->terlihat(3, $p));
+        $this->assertFalse($this->terlihat(8, $p));
+        $this->assertFalse($this->terlihat(2, $p));
+    }
+    public function test_sasaran_kelas_memerlukan_keanggotaan(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        $this->assertTrue($this->terlihat(4, $p));
+        $this->assertTrue($this->terlihat(3, $p));
+        $this->assertFalse($this->terlihat(8, $p));
+    }
+    public function test_role_dan_keanggotaan_tidak_dicampur_pada_dua_peran(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1, 4)]]));
+        // User 7 mengajar kelas 1 tetapi kuliah di kelas 2.
+        $this->assertFalse($this->terlihat(7, $p));
+        $this->assertTrue($this->terlihat(4, $p));
+    }
+    public function test_dua_peran_prodi_juga_terikat_persona(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('prodi', 1, 4)]]));
+        $this->assertFalse($this->terlihat(7, $p));
+    }
+    public function test_role_null_mengizinkan_persona_yang_cocok(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        $this->assertTrue($this->terlihat(7, $p));
+    }
+    public function test_beberapa_sasaran_menggunakan_or(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1, 4), $this->target('kelas', 2, 4)]]));
+        $this->assertTrue($this->terlihat(4, $p));
+        $this->assertTrue($this->terlihat(8, $p));
+        $this->assertFalse($this->terlihat(3, $p));
+    }
+    public function test_pencabutan_krs_menghentikan_akses(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        DB::table('krs')->where('id', 1)->update(['status' => 'draf']);
+        $this->assertFalse($this->terlihat(4, $p));
+    }
+    public function test_detail_batal_menghentikan_akses(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        DB::table('detail_krs')->where('id', 1)->update(['status' => 'batal']);
+        $this->assertFalse($this->terlihat(4, $p));
+    }
+    public function test_riwayat_nonaktif_menghentikan_akses_prodi(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('prodi', 1)]]));
+        DB::table('riwayat_studi')->where('id', 1)->update(['status' => 'keluar']);
+        $this->assertFalse($this->terlihat(4, $p));
+    }
+    public function test_pencabutan_pengajar_menghentikan_akses_dosen(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        DB::table('pengajar_kelas')->where('id', 1)->update(['aktif' => false]);
+        $this->assertFalse($this->terlihat(3, $p));
+    }
+    public function test_dosen_nonaktif_tidak_membaca_kampus_sebagai_dosen(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kampus', null, 3)]]));
+        DB::table('dosen')->where('user_id', 3)->update(['status' => 'nonaktif']);
+        $this->assertFalse($this->terlihat(3, $p));
+    }
+    public function test_dosen_boleh_menerbitkan_kelas_sendiri(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1, 4)]], 3), 3);
+        $this->assertSame('terbit', $p->status);
+        $this->assertTrue($this->terlihat(4, $p));
+    }
+    public function test_dosen_tidak_boleh_membuat_kampus(): void
+    {
+        $this->expectException(HttpException::class);
+        $this->draf([], 3);
+    }
+    public function test_dosen_tidak_boleh_membuat_kelas_lain(): void
+    {
+        $this->expectException(HttpException::class);
+        $this->draf(['sasaran' => [$this->target('kelas', 2)]], 3);
+    }
+    public function test_pengajar_lain_tidak_mengelola_draf_penulis(): void
+    {
+        $p = $this->draf(['sasaran' => [$this->target('kelas', 1)]], 3);
+        $this->assertFalse(app(AksesPengumuman::class)->mengelola(User::findOrFail(7), $p));
+    }
+    public function test_peran_dicabut_sebelum_publikasi_ditolak(): void
+    {
+        $p = $this->draf();
+        DB::table('user_roles')->where('user_id', 1)->delete();
+        $this->expectException(HttpException::class);
+        $this->terbit($p);
+    }
+    public function test_masa_tayang_berakhir_tepat_pada_batas(): void
+    {
+        $p = $this->terbit($this->draf(['berakhir_lokal' => '2026-09-18T08:01']));
+        $this->assertSame('2026-09-18 00:01:00', $p->berakhir_at->format('Y-m-d H:i:s'));
+        $this->travelTo(now('UTC')->addMinute());
+        $this->assertFalse($this->terlihat(4, $p));
+        $this->assertTrue(app(AksesPengumuman::class)->membaca(User::findOrFail(1), $p));
+    }
+    public function test_arsip_menghilangkan_bacaan(): void
+    {
+        $p = $this->aksiPengumuman($this->terbit($this->draf()), 'arsip');
+        $this->assertFalse($this->terlihat(4, $p));
+        $this->assertSame(3, $p->audits()->count());
+    }
+    public function test_arsip_tidak_dapat_diterbitkan_ulang(): void
+    {
+        $p = $this->aksiPengumuman($this->draf(), 'arsip');
+        $this->expectException(ValidationException::class);
+        $this->terbit($p);
+    }
+    public function test_token_pengiriman_ulang_tidak_menduplikasi(): void
+    {
+        $v = $this->inputPengumuman();
+        $aksi = app(KelolaPengumuman::class);
+        $a = $aksi->buat(1, $v);
+        $b = $aksi->buat(1, $v);
+        $this->assertSame($a->id, $b->id);
+        $this->assertSame(1, $a->audits()->count());
+    }
+    public function test_token_sama_isi_berbeda_ditolak(): void
+    {
+        $v = $this->inputPengumuman();
+        $aksi = app(KelolaPengumuman::class);
+        $aksi->buat(1, $v);
+        $v['judul'] = 'Isi sudah berbeda';
+        $this->expectException(ValidationException::class);
+        $aksi->buat(1, $v);
+    }
+    public function test_form_lama_ditolak(): void
+    {
+        $p = $this->draf();
+        $versi = $p->versiForm();
+        $p = $this->terbit($p);
+        $this->expectException(ValidationException::class);
+        app(KelolaPengumuman::class)->tindakan(1, $p, ['aksi' => 'arsip', 'versi' => $versi, 'konfirmasi' => 1, 'alasan' => 'Arsip dari formulir lama.']);
+    }
+    public function test_simpan_tanpa_perubahan_tidak_menambah_audit(): void
+    {
+        $v = $this->inputPengumuman();
+        $aksi = app(KelolaPengumuman::class);
+        $p = $aksi->buat(1, $v);
+        unset($v['form_token']);
+        $v['versi'] = $p->versiForm();
+        $hasil = $aksi->ubah(1, $p, $v);
+        $this->assertSame(1, $hasil->revisi);
+        $this->assertSame(1, $hasil->audits()->count());
+    }
+    public function test_publikasi_tidak_bisa_diedit(): void
+    {
+        $p = $this->terbit($this->draf());
+        $v = $this->inputPengumuman(['versi' => $p->versiForm()]);
+        unset($v['form_token']);
+        $this->expectException(ValidationException::class);
+        app(KelolaPengumuman::class)->ubah(1, $p, $v);
+    }
+    public function test_sasaran_publikasi_tidak_bisa_dihapus(): void
+    {
+        $p = $this->terbit($this->draf());
+        $this->expectException(\LogicException::class);
+        DB::transaction(fn() => $p->sasaran()->firstOrFail()->delete());
+    }
+    public function test_duplikasi_sasaran_null_ditolak(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->draf(['sasaran' => [$this->target(), $this->target()]]);
+    }
+    public function test_unique_sasaran_database_mencegah_duplikasi_model(): void
+    {
+        $p = $this->draf();
+        $this->expectException(\Illuminate\Database\QueryException::class);
+        DB::transaction(function () use ($p): void {
+            $s = new SasaranPengumuman();
+            $s->forceFill($this->target() + ['pengumuman_id' => $p->id])->save();
+        });
+    }
+    public function test_sasaran_induk_tidak_sesuai_ditolak(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->draf(['sasaran' => [array_replace($this->target(), ['kelas_kuliah_id' => 1])]]);
+    }
+    public function test_periode_arsip_mencegah_publikasi_kelas(): void
+    {
+        $p = $this->draf(['sasaran' => [$this->target('kelas', 1)]]);
+        DB::table('periode_akademik')->where('id', 1)->update(['status' => 'arsip']);
+        $this->expectException(ValidationException::class);
+        $this->terbit($p);
+    }
+    public function test_gagal_audit_membatalkan_publikasi(): void
+    {
+        $p = $this->draf();
+        DB::table('audit_log')->insert([
+            'pelaku_id' => 1,
+            'entitas' => 'pengumuman',
+            'entitas_id' => $p->id,
+            'versi_entitas' => 2,
+            'aksi' => 'fixture',
+            'sesudah' => '{}',
+            'waktu' => now('UTC')
+        ]);
+        try {
+            $this->terbit($p);
+            $this->fail('Audit unik seharusnya gagal.');
+        } catch (\Illuminate\Database\QueryException) {
+            $this->assertSame('draf', $p->fresh()->status);
+            $this->assertSame(1, $p->fresh()->revisi);
+        }
+    }
+    public function test_http_meng_escape_isi_dan_menyembunyikan_audit_pembaca(): void
+    {
+        $p = $this->terbit($this->draf(['isi' => '<script>alert("x")</script>']));
+        $this->actingAs(User::findOrFail(4))->get(route('pengumuman.show', $p))->assertOk()
+            ->assertSee('&lt;script&gt;', false)->assertDontSee('<script>', false)->assertDontSee('Audit pengelola');
+    }
+    public function test_http_daftar_tidak_membocorkan_judul_di_luar_sasaran(): void
+    {
+        $this->terbit($this->draf(['judul' => 'Rahasia kelas kedua', 'sasaran' => [$this->target('kelas', 2)]]));
+        $this->actingAs(User::findOrFail(4))->get(route('pengumuman.index'))->assertOk()->assertDontSee('Rahasia kelas kedua');
+    }
+    public function test_http_form_admin_dapat_dirender(): void
+    {
+        $this->actingAs(User::findOrFail(1))->get(route('pengumuman.create'))->assertOk()->assertSee('Simpan draf');
+    }
+    public function test_http_mahasiswa_tidak_boleh_menulis(): void
+    {
+        $this->actingAs(User::findOrFail(4))->post(route('pengumuman.store'), $this->inputPengumuman())->assertForbidden();
+        $this->assertSame(0, Pengumuman::query()->count());
+    }
+}
+
+
+================================================================================
+FILE: .\tests\Feature\NotifikasiAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\KelolaNotifikasi;
+use App\Models\{Notifikasi, User};
+use App\Services\{AksesNotifikasi, SinkronNotifikasi, SumberNotifikasi};
+use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+
+class NotifikasiAksesTest extends NotifikasiDatabaseTestCase
+{
+    public function test_pengiriman_ganda_tidak_menduplikasi(): void
+    {
+        $p = $this->terbit($this->draf());
+        $a = app(KelolaNotifikasi::class);
+        $this->assertTrue($a->kirim(4, 'pengumuman', $p->id));
+        $this->assertFalse($a->kirim(4, 'pengumuman', $p->id));
+        $this->assertSame(1, Notifikasi::query()->count());
+    }
+    public function test_judul_ringkas_tidak_menyalin_isi_sumber(): void
+    {
+        $p = $this->terbit($this->draf(['judul' => 'Rahasia internal', 'isi' => 'Data sensitif tidak disalin.']));
+        $n = $this->notif(4, $p);
+        $this->assertSame('Pengumuman tersedia', $n->judul);
+        $this->assertStringNotContainsString('Rahasia', $n->toJson());
+    }
+    public function test_sumber_tidak_dikenal_ditolak(): void
+    {
+        $this->expectException(\LogicException::class);
+        app(KelolaNotifikasi::class)->kirim(4, 'users', 1);
+    }
+    public function test_sumber_nonaktif_ditolak(): void
+    {
+        config(['notifikasi.sumber_aktif' => []]);
+        $this->expectException(\LogicException::class);
+        app(KelolaNotifikasi::class)->kirim(4, 'pengumuman', 1);
+    }
+    public function test_sumber_tidak_ada_tidak_membuat_notifikasi(): void
+    {
+        $this->assertFalse(app(KelolaNotifikasi::class)->kirim(4, 'pengumuman', 999));
+        $this->assertSame(0, Notifikasi::query()->count());
+    }
+    public function test_draf_tidak_dikirim(): void
+    {
+        $p = $this->draf();
+        $this->assertFalse(app(KelolaNotifikasi::class)->kirim(1, 'pengumuman', $p->id));
+    }
+    public function test_di_luar_sasaran_tidak_dikirim(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        $this->assertFalse(app(KelolaNotifikasi::class)->kirim(8, 'pengumuman', $p->id));
+    }
+    public function test_akun_nonaktif_tidak_dikirim(): void
+    {
+        $p = $this->terbit($this->draf());
+        $this->assertFalse(app(KelolaNotifikasi::class)->kirim(5, 'pengumuman', $p->id));
+    }
+    public function test_penerima_hanya_melihat_kotaknya_sendiri(): void
+    {
+        $n = $this->notif();
+        $a = app(AksesNotifikasi::class);
+        $this->assertTrue($a->lihat(User::findOrFail(4), $n));
+        $this->assertFalse($a->lihat(User::findOrFail(8), $n));
+        $this->assertFalse($a->lihat(User::findOrFail(1), $n));
+    }
+    public function test_admin_tidak_boleh_menandai_milik_orang_lain(): void
+    {
+        $n = $this->notif();
+        $this->actingAs(User::findOrFail(1))->post(route('notifikasi.baca', $n))->assertNotFound();
+        $this->assertNull($n->fresh()->dibaca_at);
+    }
+    public function test_get_daftar_tidak_mengubah_status_baca(): void
+    {
+        $n = $this->notif();
+        $this->actingAs(User::findOrFail(4))->get(route('notifikasi.index'))->assertOk();
+        $this->assertNull($n->fresh()->dibaca_at);
+    }
+    public function test_waktu_baca_pertama_tetap_saat_diulang(): void
+    {
+        $n = $this->notif();
+        $a = app(KelolaNotifikasi::class);
+        $a->baca(4, $n->id);
+        $pertama = $n->fresh()->dibaca_at->format('Y-m-d H:i:s');
+        $this->travelTo(now('UTC')->addMinutes(5));
+        $a->baca(4, $n->id);
+        $this->assertSame($pertama, $n->fresh()->dibaca_at->format('Y-m-d H:i:s'));
+    }
+    public function test_sinkron_ulang_tidak_mereset_status_baca(): void
+    {
+        $n = $this->notif();
+        app(KelolaNotifikasi::class)->baca(4, $n->id);
+        $this->assertFalse(app(KelolaNotifikasi::class)->kirim(4, 'pengumuman', $n->sumber_id));
+        $this->assertNotNull($n->fresh()->dibaca_at);
+    }
+    public function test_buka_memakai_route_internal_dan_menandai_dibaca(): void
+    {
+        $n = $this->notif();
+        $this->actingAs(User::findOrFail(4))->post(route('notifikasi.buka', $n))
+            ->assertRedirect(route('pengumuman.show', $n->sumber_id));
+        $this->assertNotNull($n->fresh()->dibaca_at);
+    }
+    public function test_client_tidak_boleh_memilih_url(): void
+    {
+        $n = $this->notif();
+        $this->actingAs(User::findOrFail(4))->post(route('notifikasi.buka', $n), ['url' => 'https://example.org'])
+            ->assertSessionHasErrors('url');
+        $this->assertNull($n->fresh()->dibaca_at);
+    }
+    public function test_arsip_menyembunyikan_notifikasi_dan_hitungan(): void
+    {
+        $p = $this->terbit($this->draf());
+        $n = $this->notif(4, $p);
+        $this->aksiPengumuman($p, 'arsip');
+        $this->assertFalse(app(AksesNotifikasi::class)->lihat(User::findOrFail(4), $n));
+        $this->actingAs(User::findOrFail(4))->get(route('notifikasi.index'))->assertOk()->assertViewHas('belum', 0);
+        $this->assertSame(1, Notifikasi::query()->count());
+    }
+    public function test_akses_dicabut_sebelum_buka_ditolak(): void
+    {
+        $p = $this->terbit($this->draf(['sasaran' => [$this->target('kelas', 1)]]));
+        $n = $this->notif(4, $p);
+        DB::table('krs')->where('id', 1)->update(['status' => 'draf']);
+        $this->actingAs(User::findOrFail(4))->post(route('notifikasi.buka', $n))->assertNotFound();
+        $this->assertNull($n->fresh()->dibaca_at);
+    }
+    public function test_notifikasi_kedaluwarsa_tidak_bisa_dibuka(): void
+    {
+        $p = $this->terbit($this->draf(['berakhir_lokal' => '2026-09-18T08:01']));
+        $n = $this->notif(4, $p);
+        $this->travelTo(now('UTC')->addMinutes(2));
+        $this->expectException(HttpException::class);
+        app(KelolaNotifikasi::class)->baca(4, $n->id, true);
+    }
+    public function test_baca_halaman_hanya_ids_yang_dikirim(): void
+    {
+        $a = $this->notif();
+        $b = $this->notif();
+        $this->assertSame(1, app(KelolaNotifikasi::class)->bacaHalaman(4, ['ids' => [$a->id]]));
+        $this->assertNotNull($a->fresh()->dibaca_at);
+        $this->assertNull($b->fresh()->dibaca_at);
+    }
+    public function test_baca_halaman_id_asing_membatalkan_seluruhnya(): void
+    {
+        $a = $this->notif();
+        $asing = $this->notif(8);
+        try {
+            app(KelolaNotifikasi::class)->bacaHalaman(4, ['ids' => [$a->id, $asing->id]]);
+            $this->fail('Harus ditolak.');
+        } catch (ValidationException) {
+            $this->assertNull($a->fresh()->dibaca_at);
+            $this->assertNull($asing->fresh()->dibaca_at);
+        }
+    }
+    public function test_baca_halaman_id_duplikat_ditolak(): void
+    {
+        $n = $this->notif();
+        $this->expectException(ValidationException::class);
+        app(KelolaNotifikasi::class)->bacaHalaman(4, ['ids' => [$n->id, $n->id]]);
+    }
+    public function test_baca_halaman_dibatasi_dua_puluh(): void
+    {
+        $this->expectException(ValidationException::class);
+        app(KelolaNotifikasi::class)->bacaHalaman(4, ['ids' => range(1, 21)]);
+    }
+    public function test_model_tidak_boleh_mengganti_penerima(): void
+    {
+        $n = $this->notif();
+        $this->expectException(\LogicException::class);
+        DB::transaction(function () use ($n): void {
+            $n->penerima_id = 8;
+            $n->save();
+        });
+    }
+    public function test_model_tidak_boleh_mereset_baca(): void
+    {
+        $n = $this->notif();
+        app(KelolaNotifikasi::class)->baca(4, $n->id);
+        $n->refresh();
+        $this->expectException(\LogicException::class);
+        DB::transaction(function () use ($n): void {
+            $n->dibaca_at = null;
+            $n->save();
+        });
+    }
+    public function test_sinkronisasi_mengambil_sumber_terbaru_secara_idempoten(): void
+    {
+        $this->terbit($this->draf());
+        $s = app(SinkronNotifikasi::class);
+        $sejak = CarbonImmutable::now('UTC')->subDays(30);
+        $this->assertSame(1, $s->pengguna(4, $sejak));
+        $this->assertSame(0, $s->pengguna(4, $sejak));
+    }
+    public function test_rentang_sinkron_tidak_mengambil_sumber_lama(): void
+    {
+        $p = $this->terbit($this->draf());
+        DB::table('pengumuman')->where('id', $p->id)->update(['updated_at' => now('UTC')->subDays(40)]);
+        $s = app(SinkronNotifikasi::class);
+        $this->assertSame(0, $s->pengguna(4, CarbonImmutable::now('UTC')->subDays(30)));
+        $this->assertSame(1, $s->pengguna(4, CarbonImmutable::now('UTC')->subDays(60)));
+    }
+    public function test_command_satu_pengguna_dan_pengulangan(): void
+    {
+        $this->terbit($this->draf());
+        $this->artisan('notifikasi:sinkronkan', ['--user' => 4, '--hari' => 30])->assertSuccessful();
+        $this->artisan('notifikasi:sinkronkan', ['--user' => 4, '--hari' => 30])->assertSuccessful();
+        $this->assertSame(1, Notifikasi::query()->count());
+    }
+    public function test_command_hari_tidak_valid(): void
+    {
+        $this->artisan('notifikasi:sinkronkan', ['--hari' => 0])->assertExitCode(2);
+    }
+    public function test_semua_sumber_terdaftar_memiliki_query_dan_route_tetap(): void
+    {
+        $this->sumberLain();
+        $s = app(SumberNotifikasi::class);
+        $u = User::findOrFail(4);
+        foreach (['materi', 'kegiatan', 'tagihan', 'pembayaran', 'surat', 'kalender'] as $jenis) {
+            $this->assertTrue($s->query($jenis, $u)->whereKey(1)->exists(), $jenis);
+            $this->assertTrue(app(KelolaNotifikasi::class)->kirim(4, $jenis, 1), $jenis);
+            $this->assertStringStartsWith('/', $s->tujuan($jenis, 1));
+        }
+    }
+    public function test_keuangan_dan_surat_tidak_dikirim_ke_mahasiswa_lain(): void
+    {
+        $this->sumberLain();
+        foreach (['tagihan', 'pembayaran', 'surat'] as $jenis) {
+            $this->assertFalse(app(KelolaNotifikasi::class)->kirim(8, $jenis, 1), $jenis);
+        }
+    }
+    public function test_krs_memakai_versi_dan_hanya_route_admin(): void
+    {
+        $this->sumberLain();
+        DB::table('krs')->where('id', 1)->update(['versi' => 7]);
+        $a = app(KelolaNotifikasi::class);
+        $this->assertFalse($a->kirim(4, 'krs', 1));
+        $this->assertTrue($a->kirim(1, 'krs', 1));
+        $n = Notifikasi::query()->where('jenis', 'krs')->firstOrFail();
+        $this->assertSame(7, $n->sumber_revisi);
+        $this->assertSame('/admin/krs/1', app(SumberNotifikasi::class)->tujuan('krs', 1));
+    }
+    public function test_revisi_baru_membuat_notifikasi_baru_tanpa_mereset_yang_lama(): void
+    {
+        $this->sumberLain();
+        $a = app(KelolaNotifikasi::class);
+        $a->kirim(4, 'pembayaran', 1);
+        $lama = Notifikasi::query()->firstOrFail();
+        $a->baca(4, $lama->id);
+        DB::table('pembayaran')->where('id', 1)->update(['status' => 'diterima', 'revisi' => 2]);
+        $this->assertTrue($a->kirim(4, 'pembayaran', 1));
+        $this->assertSame(2, Notifikasi::query()->count());
+        $this->assertNotNull($lama->fresh()->dibaca_at);
+    }
+    public function test_semua_jenis_dapat_difilter_di_daftar_tanpa_bocor(): void
+    {
+        $this->sumberLain();
+        $a = app(KelolaNotifikasi::class);
+        $a->kirim(4, 'materi', 1);
+        $a->kirim(4, 'pembayaran', 1);
+        $this->actingAs(User::findOrFail(4))->get(route('notifikasi.index', ['jenis' => 'materi']))->assertOk()
+            ->assertSee('Pembaruan materi perkuliahan')->assertDontSee('Pembaruan pengajuan pembayaran');
+    }
+    public function test_sumber_dihapus_membuat_referensi_tidak_terlihat(): void
+    {
+        $this->sumberLain();
+        app(KelolaNotifikasi::class)->kirim(4, 'materi', 1);
+        $n = Notifikasi::query()->firstOrFail();
+        DB::table('materi')->where('id', 1)->delete();
+        $this->assertFalse(app(AksesNotifikasi::class)->lihat(User::findOrFail(4), $n));
+    }
+    public function test_unique_database_menolak_peristiwa_ganda(): void
+    {
+        $n = $this->notif();
+        $data = $n->getRawOriginal();
+        unset($data['id']);
+        $this->expectException(\Illuminate\Database\QueryException::class);
+        DB::table('notifikasi')->insert($data);
+    }
+    public function test_model_menolak_penulisan_tanpa_transaksi(): void
+    {
+        $n = $this->notif();
+        $this->expectException(\LogicException::class);
+        $n->dibaca_at = now('UTC');
+        $n->save();
+    }
+    public function test_akun_dinonaktifkan_setelah_menerima_ditolak(): void
+    {
+        $n = $this->notif();
+        DB::table('users')->where('id', 4)->update(['status' => 'nonaktif']);
+        $this->assertFalse(app(AksesNotifikasi::class)->lihat(User::findOrFail(4), $n));
+        $this->expectException(HttpException::class);
+        app(KelolaNotifikasi::class)->baca(4, $n->id);
+    }
+    public function test_modul_dinonaktifkan_menyembunyikan_notifikasi_lama(): void
+    {
+        $n = $this->notif();
+        config(['notifikasi.sumber_aktif' => []]);
+        $this->assertFalse(app(AksesNotifikasi::class)->lihat(User::findOrFail(4), $n));
+        $this->assertSame(1, Notifikasi::query()->count());
+    }
+}

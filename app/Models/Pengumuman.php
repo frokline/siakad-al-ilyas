@@ -78,7 +78,7 @@ class Pengumuman extends Model
     }
     public function kedaluwarsa(): bool
     {
-        return $this->berakhir_at !== null && $this->berakhir_at->lessThanOrEqualTo(now('UTC'));
+        return $this->berakhir_at !== null && $this->berakhir_at->lteTo(now('UTC'));
     }
     public function ringkasanAudit(): array
     {

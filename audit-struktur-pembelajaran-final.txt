@@ -1,0 +1,999 @@
+
+==========================================================================================
+FILE: .\app\Models\Kegiatan.php
+==========================================================================================
+<?php
+
+namespace App\Models;
+
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
+
+class Kegiatan extends Model
+{
+    public const DRAF = 'draf';
+    public const TERBIT = 'terbit';
+    public const DITUTUP = 'ditutup';
+    public const ARSIP = 'arsip';
+    public const STATUS = ['draf' => 'Draf', 'terbit' => 'Terbit', 'ditutup' => 'Ditutup', 'arsip' => 'Arsip'];
+    public const JENIS = ['tugas' => 'Tugas', 'latihan' => 'Latihan', 'uts' => 'UTS', 'uas' => 'UAS'];
+    public const ISI_TETAP = [
+        'pertemuan_id',
+        'jenis',
+        'metode',
+        'judul',
+        'instruksi',
+        'buka_at',
+        'maks_ukuran_byte',
+        'maks_berkas',
+        'ekstensi_diizinkan'
+    ];
+    protected $table = 'kegiatan';
+    protected $guarded = ['*'];
+    protected $hidden = ['form_token', 'hash_permohonan', 'instruksi'];
+
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kelas_kuliah_id' => 'integer',
+            'pertemuan_id' => 'integer',
+            'pembuat_id' => 'integer',
+            'maks_ukuran_byte' => 'integer',
+            'maks_berkas' => 'integer',
+            'ekstensi_diizinkan' => 'array',
+            'revisi' => 'integer',
+            'buka_at' => 'immutable_datetime',
+            'tenggat_at' => 'immutable_datetime',
+            'terbit_at' => 'immutable_datetime',
+            'ditutup_at' => 'immutable_datetime',
+            'diarsipkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $k): void {
+            if (
+                $k->getConnection()->transactionLevel() < 1 || blank($k->judul) || mb_strlen($k->judul) > 200
+                || blank($k->instruksi) || mb_strlen($k->instruksi) > 10000
+                || ! isset(self::JENIS[$k->jenis]) || ! isset(self::STATUS[$k->status])
+                || $k->metode !== 'pengumpulan_berkas' || $k->revisi < 1 || $k->revisi > 4294967295
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $k->hash_permohonan)
+            ) {
+                throw new LogicException('Kegiatan harus valid dan ditulis melalui KelolaKegiatan.');
+            }
+            if (
+                ! $k->buka_at || ! $k->tenggat_at || ! $k->buka_at->lt($k->tenggat_at)
+                || $k->maks_berkas < 1 || $k->maks_berkas > 5 || $k->maks_ukuran_byte < 1048576 || $k->maks_ukuran_byte > 20971520
+                || ! is_array($k->ekstensi_diizinkan) || count($k->ekstensi_diizinkan) < 1
+                || array_diff($k->ekstensi_diizinkan, ['pdf', 'jpg', 'png']) !== []
+                || count(array_unique($k->ekstensi_diizinkan)) !== count($k->ekstensi_diizinkan)
+            ) {
+                throw new LogicException('Jadwal atau batas jawaban tidak valid.');
+            }
+            $valid = match ($k->status) {
+                self::DRAF => $k->terbit_at === null && $k->ditutup_at === null && $k->diarsipkan_at === null,
+                self::TERBIT => $k->terbit_at !== null && $k->ditutup_at === null && $k->diarsipkan_at === null,
+                self::DITUTUP => $k->terbit_at !== null && $k->ditutup_at !== null && $k->diarsipkan_at === null,
+                self::ARSIP => $k->diarsipkan_at !== null,
+            };
+            if (! $valid) {
+                throw new LogicException('Status dan waktu kegiatan tidak sesuai.');
+            }
+            if (! $k->exists) {
+                if ($k->status !== self::DRAF || $k->revisi !== 1) {
+                    throw new LogicException('Kegiatan baru harus draf, revisi satu.');
+                }
+                return;
+            }
+            $asal = $k->getRawOriginal('status');
+            $transisi = [
+                self::DRAF => [self::DRAF, self::TERBIT, self::ARSIP],
+                self::TERBIT => [self::TERBIT, self::DITUTUP, self::ARSIP],
+                self::DITUTUP => [self::DITUTUP, self::TERBIT, self::ARSIP],
+                self::ARSIP => [self::DRAF, self::DITUTUP]
+            ];
+            if (
+                $k->isDirty(['kelas_kuliah_id', 'pembuat_id', 'form_token', 'hash_permohonan'])
+                || $k->revisi !== (int) $k->getRawOriginal('revisi') + 1
+                || ! in_array($k->status, $transisi[$asal] ?? [], true)
+            ) {
+                throw new LogicException('Identitas tetap; revisi dan transisi harus sesuai.');
+            }
+            if ($k->getRawOriginal('terbit_at') !== null) {
+                if ($k->isDirty([...self::ISI_TETAP, 'terbit_at']) || $k->status === self::DRAF) {
+                    throw new LogicException('Isi dan aturan kegiatan dikunci sejak penerbitan pertama.');
+                }
+                if ($k->isDirty('tenggat_at') && ! $k->tenggat_at->gt(CarbonImmutable::parse($k->getRawOriginal('tenggat_at'), 'UTC'))) {
+                    throw new LogicException('Tenggat hanya boleh diperpanjang.');
+                }
+            } elseif (
+                ! ($asal === self::DRAF && $k->status === self::DRAF)
+                && $k->isDirty([...self::ISI_TETAP, 'tenggat_at'])
+            ) {
+                throw new LogicException('Ubah isi melalui edit draf sebelum menerbitkan.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Gunakan arsip; kegiatan tidak dihapus.');
+        });
+    }
+    public function kelasKuliah(): BelongsTo
+    {
+        return $this->belongsTo(KelasKuliah::class, 'kelas_kuliah_id');
+    }
+    public function pertemuan(): BelongsTo
+    {
+        return $this->belongsTo(Pertemuan::class, 'pertemuan_id');
+    }
+    public function pembuat(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'pembuat_id');
+    }
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(KegiatanBerkas::class, 'kegiatan_id')->where('aktif', true);
+    }
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(KegiatanBerkas::class, 'kegiatan_id');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'kegiatan');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'kegiatan:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    // Ini hanya pemeriksaan status/waktu, BUKAN pengganti otorisasi peserta ketika pengumpulan dibuat.
+    public function jendelaTerbuka(?CarbonImmutable $waktu = null): bool
+    {
+        $waktu ??= CarbonImmutable::now('UTC');
+        return $this->status === self::TERBIT && $this->terbit_at !== null && $this->terbit_at->lte($waktu)
+            && $this->buka_at !== null && $this->tenggat_at !== null && $this->buka_at->lte($waktu) && $waktu->lt($this->tenggat_at);
+    }
+    public function labelJadwal(): string
+    {
+        if ($this->status === self::DRAF) {
+            return 'Draf';
+        }
+        if ($this->status === self::ARSIP) {
+            return 'Arsip';
+        }
+        if ($this->status === self::DITUTUP) {
+            return 'Ditutup oleh pengajar';
+        }
+        if (now('UTC')->lt($this->buka_at)) {
+            return 'Belum mulai';
+        }
+        return $this->jendelaTerbuka() ? 'Dalam jadwal pengumpulan' : 'Tenggat telah lewat';
+    }
+    public function ringkasanAudit(): array
+    {
+        return [
+            ...$this->only([
+                'kelas_kuliah_id',
+                'pertemuan_id',
+                'pembuat_id',
+                ...self::ISI_TETAP,
+                'tenggat_at',
+                'status',
+                'terbit_at',
+                'ditutup_at',
+                'diarsipkan_at',
+                'revisi'
+            ]),
+            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+        ];
+    }
+
+    public function pengumpulan(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\Pengumpulan::class, 'kegiatan_id');
+    }
+}
+
+
+==========================================================================================
+FILE: .\app\Models\Materi.php
+==========================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
+
+class Materi extends Model
+{
+    public const DRAF = 'draf';
+    public const TERBIT = 'terbit';
+    public const ARSIP = 'arsip';
+    public const STATUS = ['draf' => 'Draf', 'terbit' => 'Terbit', 'arsip' => 'Arsip'];
+    protected $table = 'materi';
+    protected $guarded = ['*'];
+    protected $hidden = ['form_token', 'hash_permohonan'];
+
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kelas_kuliah_id' => 'integer',
+            'pertemuan_id' => 'integer',
+            'pembuat_id' => 'integer',
+            'revisi' => 'integer',
+            'terbit_at' => 'immutable_datetime',
+            'diarsipkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $m): void {
+            if (
+                $m->getConnection()->transactionLevel() < 1 || blank($m->judul)
+                || mb_strlen($m->judul) > 200 || ! isset(self::STATUS[$m->status])
+                || $m->revisi < 1 || $m->revisi > 4294967295
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $m->hash_permohonan)
+            ) {
+                throw new LogicException('Materi harus valid dan disimpan melalui KelolaMateri.');
+            }
+            if (($m->status === self::DRAF && $m->terbit_at !== null)
+                || ($m->status === self::TERBIT && $m->terbit_at === null)
+                || (($m->status === self::ARSIP) !== ($m->diarsipkan_at !== null))
+            ) {
+                throw new LogicException('Status dan waktu materi tidak sesuai.');
+            }
+            if (! $m->exists) {
+                if ($m->status !== self::DRAF || $m->revisi !== 1) {
+                    throw new LogicException('Materi baru harus draf, revisi pertama.');
+                }
+                return;
+            }
+            $asal = $m->getRawOriginal('status');
+            $transisi = [
+                self::DRAF => [self::DRAF, self::TERBIT, self::ARSIP],
+                self::TERBIT => [self::DRAF, self::ARSIP],
+                self::ARSIP => [self::DRAF]
+            ];
+            if (
+                $m->isDirty(['kelas_kuliah_id', 'pembuat_id', 'form_token', 'hash_permohonan'])
+                || $m->revisi !== (int) $m->getRawOriginal('revisi') + 1
+                || ! in_array($m->status, $transisi[$asal] ?? [], true)
+            ) {
+                throw new LogicException('Identitas materi tetap; transisi dan revisi harus sah.');
+            }
+            if (
+                ! ($asal === self::DRAF && $m->status === self::DRAF)
+                && $m->isDirty(['judul', 'isi', 'tautan_eksternal', 'pertemuan_id'])
+            ) {
+                throw new LogicException('Tarik materi menjadi draf sebelum mengubah isi.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Gunakan arsip; materi tidak dihapus.');
+        });
+    }
+
+    public function kelasKuliah(): BelongsTo
+    {
+        return $this->belongsTo(KelasKuliah::class, 'kelas_kuliah_id');
+    }
+    public function pertemuan(): BelongsTo
+    {
+        return $this->belongsTo(Pertemuan::class, 'pertemuan_id');
+    }
+    public function pembuat(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'pembuat_id');
+    }
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(MateriBerkas::class, 'materi_id')->where('aktif', true);
+    }
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(MateriBerkas::class, 'materi_id');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'materi');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'materi:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function sudahTerbit(): bool
+    {
+        return $this->status === self::TERBIT && $this->terbit_at !== null && $this->terbit_at->lte(now('UTC'));
+    }
+    public function ringkasanAudit(): array
+    {
+        return [
+            ...$this->only([
+                'kelas_kuliah_id',
+                'pertemuan_id',
+                'pembuat_id',
+                'judul',
+                'isi',
+                'tautan_eksternal',
+                'status',
+                'terbit_at',
+                'diarsipkan_at',
+                'revisi'
+            ]),
+            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+        ];
+    }
+}
+
+
+==========================================================================================
+FILE: .\app\Models\Pengumpulan.php
+==========================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
+use LogicException;
+
+class Pengumpulan extends Model
+{
+    public const DRAF = 'draf';
+    public const DIKIRIM = 'dikirim';
+public const STATUS = ['draf' => 'Sedang dikerjakan', 'dikirim' => 'Sudah dikumpulkan'];
+    protected $table = 'pengumpulan';
+    protected $guarded = ['*'];
+    protected $hidden = ['token_draf', 'kunci_kirim', 'jawaban_teks'];
+    protected function casts(): array
+    {
+        return [
+            'id' => 'integer',
+            'kegiatan_id' => 'integer',
+            'detail_krs_id' => 'integer',
+            'pemilik_id' => 'integer',
+            'versi' => 'integer',
+            'penanda_draf' => 'integer',
+            'revisi' => 'integer',
+            'revisi_kegiatan' => 'integer',
+            'dikirim_at' => 'immutable_datetime',
+            'tenggat_snapshot' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $p): void {
+            if (
+                $p->getConnection()->transactionLevel() < 1 || ! isset(self::STATUS[$p->status])
+                || $p->versi < 1 || $p->versi > 4294967295 || $p->revisi < 1 || $p->revisi > 4294967295
+                || $p->kegiatan_id < 1 || $p->detail_krs_id < 1 || $p->pemilik_id < 1
+                || ! Str::isUuid((string) $p->token_draf) || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $p->kunci_kirim)
+                || mb_strlen((string) $p->jawaban_teks) > 10000
+            ) {
+                throw new LogicException('Pengumpulan harus valid dan ditulis melalui KelolaPengumpulan.');
+            }
+            if ($p->status === self::DRAF) {
+                if (
+                    $p->penanda_draf !== 1 || $p->dikirim_at !== null || $p->tenggat_snapshot !== null
+                    || $p->revisi_kegiatan !== null || $p->hash_jawaban !== null
+                ) {
+                    throw new LogicException('Draf tidak mempunyai metadata kiriman final.');
+                }
+            } elseif (
+                $p->penanda_draf !== null || $p->dikirim_at === null || $p->tenggat_snapshot === null
+                || ! $p->dikirim_at->lt($p->tenggat_snapshot) || $p->revisi_kegiatan < 1
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $p->hash_jawaban)
+            ) {
+                throw new LogicException('Metadata kiriman final tidak lengkap.');
+            }
+            if (! $p->exists) {
+                if ($p->status !== self::DRAF || $p->revisi !== 1) {
+                    throw new LogicException('Versi baru harus draf, revisi satu.');
+                }
+                return;
+            }
+            if (
+                $p->getRawOriginal('status') !== self::DRAF
+                || $p->isDirty(['kegiatan_id', 'detail_krs_id', 'pemilik_id', 'versi', 'token_draf', 'kunci_kirim'])
+                || $p->revisi !== (int) $p->getRawOriginal('revisi') + 1
+            ) {
+                throw new LogicException('Identitas dan jawaban yang dikirim tidak boleh diubah.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Riwayat pengumpulan tidak dihapus.');
+        });
+    }
+    public function kegiatan(): BelongsTo
+    {
+        return $this->belongsTo(Kegiatan::class, 'kegiatan_id');
+    }
+    public function detailKrs(): BelongsTo
+    {
+        return $this->belongsTo(DetailKrs::class, 'detail_krs_id');
+    }
+    public function pemilik(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'pemilik_id');
+    }
+    public function lampiran(): HasMany
+    {
+        return $this->hasMany(PengumpulanBerkas::class, 'pengumpulan_id')->where('aktif', true);
+    }
+    public function semuaLampiran(): HasMany
+    {
+        return $this->hasMany(PengumpulanBerkas::class, 'pengumpulan_id');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'pengumpulan');
+    }
+    public function scopeBerlaku(Builder $q): Builder
+    {
+        return $q->where('pengumpulan.status', self::DIKIRIM)->whereNotExists(function ($sub): void {
+            $sub->selectRaw('1')->from('pengumpulan as lebih_baru')->whereColumn('lebih_baru.kegiatan_id', 'pengumpulan.kegiatan_id')
+                ->whereColumn('lebih_baru.detail_krs_id', 'pengumpulan.detail_krs_id')->where('lebih_baru.status', self::DIKIRIM)
+                ->whereColumn('lebih_baru.versi', '>', 'pengumpulan.versi');
+        });
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'pengumpulan:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function hitungHash(): string
+    {
+        $files = $this->lampiran()->orderBy('berkas_id')->get()->map(fn(PengumpulanBerkas $b) =>
+        $b->only(['berkas_id', 'nama_asli', 'mime_type', 'ekstensi', 'ukuran_byte', 'sha256']))->all();
+        return hash('sha256', json_encode([
+            'kegiatan' => $this->kegiatan_id,
+            'peserta' => $this->detail_krs_id,
+            'versi' => $this->versi,
+            'jawaban' => $this->jawaban_teks,
+            'berkas' => $files
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+    }
+    public function ringkasanAudit(): array
+    {
+        // Jangan menyalin teks jawaban, kunci kirim, atau lokasi cloud ke audit umum.
+        return [
+            ...$this->only([
+                'kegiatan_id',
+                'detail_krs_id',
+                'pemilik_id',
+                'versi',
+                'status',
+                'revisi',
+                'dikirim_at',
+                'tenggat_snapshot',
+                'revisi_kegiatan',
+                'hash_jawaban'
+            ]),
+            'panjang_teks' => mb_strlen((string) $this->jawaban_teks),
+            'hash_isi' => $this->hitungHash(),
+            'berkas_ids' => $this->lampiran()->orderBy('berkas_id')->pluck('berkas_id')->all()
+        ];
+    }
+}
+
+
+==========================================================================================
+FILE: .\app\Models\Berkas.php
+==========================================================================================
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+use LogicException;
+
+class Berkas extends Model
+{
+    public const MENUNGGU = 'menunggu';
+    public const TERSEDIA = 'tersedia';
+    public const DITOLAK = 'ditolak';
+    public const DIHAPUS = 'dihapus';
+    public const STATUS = [
+        self::MENUNGGU => 'Sedang diproses',
+        self::TERSEDIA => 'Tersedia',
+        self::DITOLAK => 'Gagal diproses',
+        self::DIHAPUS => 'Dinonaktifkan'
+    ];
+    public const IDENTITAS = [
+        'diunggah_oleh',
+        'upload_token',
+        'storage_disk',
+        'object_key',
+        'nama_asli',
+        'mime_type',
+        'ekstensi',
+        'ukuran_byte',
+        'sha256',
+        'pemeriksaan',
+        'diperiksa_at'
+    ];
+    protected $table = 'berkas';
+    protected $guarded = ['*'];
+    protected $hidden = ['storage_disk', 'object_key', 'upload_token'];
+
+    protected function casts(): array
+    {
+        return [
+            'diunggah_oleh' => 'integer',
+            'ukuran_byte' => 'integer',
+            'revisi' => 'integer',
+            'diperiksa_at' => 'immutable_datetime',
+            'tersedia_at' => 'immutable_datetime',
+            'dinonaktifkan_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $file): void {
+            if (
+                DB::transactionLevel() < 1 || ! isset(self::STATUS[$file->status]) || $file->ukuran_byte < 1
+                || ! preg_match('/\A[a-f0-9]{64}\z/', (string) $file->sha256) || blank($file->label)
+            ) {
+                throw new LogicException('Metadata berkas wajib lengkap dan disimpan melalui transaksi.');
+            }
+            if (! $file->exists) {
+                if ($file->status !== self::MENUNGGU || $file->revisi !== 1) {
+                    throw new LogicException('Berkas baru harus menunggu, revisi 1.');
+                }
+            } else {
+                $asal = $file->getRawOriginal('status');
+                $tujuan = [
+                    self::MENUNGGU => [self::TERSEDIA, self::DITOLAK],
+                    self::TERSEDIA => [self::TERSEDIA, self::DIHAPUS],
+                    self::DIHAPUS => [self::TERSEDIA],
+                    self::DITOLAK => []
+                ];
+                if (
+                    $file->isDirty(self::IDENTITAS) || ! in_array($file->status, $tujuan[$asal] ?? [], true)
+                    || $file->revisi !== (int) $file->getRawOriginal('revisi') + 1
+                    || ($asal === self::TERSEDIA && $file->status === self::TERSEDIA && ! $file->isDirty(['label', 'keterangan']))
+                ) {
+                    throw new LogicException('Identitas berkas tetap; perubahan/transisi harus sah dan menaikkan revisi.');
+                }
+                if ($asal !== self::MENUNGGU && $file->isDirty('tersedia_at')) {
+                    throw new LogicException('Waktu ketersediaan pertama tidak boleh diubah.');
+                }
+            }
+            $siap = in_array($file->status, [self::TERSEDIA, self::DIHAPUS], true);
+            if ($siap !== ($file->tersedia_at !== null) || ($file->status === self::DIHAPUS) !== ($file->dinonaktifkan_at !== null)) {
+                throw new LogicException('Status dan waktu berkas tidak sesuai.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Berkas tidak dihapus fisik melalui model. Gunakan nonaktifkan.');
+        });
+    }
+    public function pengunggah(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'diunggah_oleh');
+    }
+    public function audits(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'entitas_id')->where('entitas', 'berkas');
+    }
+    public function versiForm(): string
+    {
+        return hash_hmac('sha256', 'berkas:' . $this->id . ':' . $this->revisi, (string) config('app.key'));
+    }
+    public function labelStatus(): string
+    {
+        return self::STATUS[$this->status];
+    }
+    public function ukuranLabel(): string
+    {
+        return number_format($this->ukuran_byte / 1048576, 2, ',', '.') . ' MB';
+    }
+    public function ringkasanAudit(): array
+    {
+        return $this->only([
+            'diunggah_oleh',
+            'nama_asli',
+            'label',
+            'keterangan',
+            'mime_type',
+            'ekstensi',
+            'ukuran_byte',
+            'sha256',
+            'pemeriksaan',
+            'diperiksa_at',
+            'status',
+            'pesan_status',
+            'tersedia_at',
+            'dinonaktifkan_at',
+            'revisi'
+        ]);
+    }
+
+    public function materiLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\MateriBerkas::class, 'berkas_id');
+    }
+
+    public function kegiatanLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\KegiatanBerkas::class, 'berkas_id');
+    }
+
+    public function pengumpulanLampiran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PengumpulanBerkas::class, 'berkas_id');
+    }
+
+    public function pembayaran(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\Pembayaran::class, 'bukti_berkas_id');
+    }
+    public function lampiranPermohonanSurat(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PermohonanSurat::class, 'lampiran_berkas_id');
+    }
+    public function hasilPermohonanSurat(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PermohonanSurat::class, 'hasil_berkas_id');
+    }
+}
+
+
+==========================================================================================
+FILE: .\app\Models\Notifikasi.php
+==========================================================================================
+<?php
+
+namespace App\Models;
+
+use App\Services\SumberNotifikasi;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use LogicException;
+
+class Notifikasi extends Model
+{
+    protected $table = 'notifikasi';
+    protected $guarded = ['*'];
+    protected function casts(): array
+    {
+        return [
+            'penerima_id' => 'integer',
+            'sumber_id' => 'integer',
+            'sumber_revisi' => 'integer',
+            'dibaca_at' => 'immutable_datetime',
+            'created_at' => 'immutable_datetime',
+            'updated_at' => 'immutable_datetime'
+        ];
+    }
+    protected static function booted(): void
+    {
+        static::saving(function (self $n): void {
+            $def = SumberNotifikasi::DAFTAR[$n->jenis] ?? null;
+            if (
+                $n->getConnection()->transactionLevel() < 1 || ! $def || $n->penerima_id < 1 || $n->sumber_id < 1
+                || $n->sumber_revisi < 1 || $n->sumber_revisi > 4294967295 || $n->sumber_tabel !== $def['tabel']
+                || $n->judul !== $def['judul'] || $n->kunci_peristiwa !== self::kunci($n->jenis, $n->sumber_id, $n->sumber_revisi)
+            ) {
+                throw new LogicException('Notifikasi harus dibuat oleh layanan dari sumber terdaftar.');
+            }
+            if (! $n->exists && $n->dibaca_at !== null) {
+                throw new LogicException('Notifikasi baru harus belum dibaca.');
+            }
+            if ($n->exists && ($n->isDirty(['penerima_id', 'jenis', 'judul', 'sumber_tabel', 'sumber_id', 'sumber_revisi', 'kunci_peristiwa', 'created_at'])
+                || ($n->isDirty('dibaca_at') && ($n->getRawOriginal('dibaca_at') !== null || $n->dibaca_at === null)))) {
+                throw new LogicException('Identitas tetap; waktu baca pertama tidak boleh diubah.');
+            }
+        });
+        static::deleting(function (): never {
+            throw new LogicException('Penghapusan notifikasi bukan bagian modul ini.');
+        });
+    }
+    public static function kunci(string $jenis, int $id, int $revisi): string
+    {
+        return $jenis . ':' . $id . ':revisi:' . $revisi;
+    }
+    public function penerima(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'penerima_id');
+    }
+    // Referensi sumber adalah referensi logis terdaftar, bukan morphTo dari nama class input.
+}
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_17_064106_create_berkas_table.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        foreach (['users', 'audit_log'] as $induk) {
+            if (! Schema::hasTable($induk)) {
+                throw new RuntimeException("Tabel induk {$induk} belum tersedia.");
+            }
+        }
+        Schema::create('berkas', function (Blueprint $table): void {
+            $table->engine = 'InnoDB';
+            $table->id();
+            $table->foreignId('diunggah_oleh')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $table->uuid('upload_token');
+            $table->string('storage_disk', 40);
+            $table->string('object_key', 500);
+            $table->string('nama_asli', 255);
+            $table->string('label', 200);
+            $table->text('keterangan')->nullable();
+            $table->string('mime_type', 150);
+            $table->string('ekstensi', 10);
+            $table->unsignedBigInteger('ukuran_byte');
+            $table->char('sha256', 64);
+            $table->enum('pemeriksaan', ['format', 'clamav']);
+            $table->dateTime('diperiksa_at');
+            $table->enum('status', ['menunggu', 'tersedia', 'ditolak', 'dihapus'])->default('menunggu');
+            $table->string('pesan_status', 255)->nullable();
+            $table->dateTime('tersedia_at')->nullable();
+            $table->dateTime('dinonaktifkan_at')->nullable();
+            $table->unsignedInteger('revisi')->default(1);
+            $table->timestamps();
+            $table->unique(['diunggah_oleh', 'upload_token'], 'berkas_upload_unique');
+            $table->unique(['storage_disk', 'object_key'], 'berkas_object_unique');
+            $table->index(['diunggah_oleh', 'status', 'id'], 'berkas_pemilik_status_index');
+            $table->index(['status', 'created_at'], 'berkas_proses_index');
+        });
+        DB::statement("ALTER TABLE berkas ADD CONSTRAINT berkas_metadata_valid CHECK (
+            ukuran_byte > 0 AND revisi > 0 AND
+            ((status IN ('menunggu', 'ditolak') AND tersedia_at IS NULL AND dinonaktifkan_at IS NULL)
+             OR (status = 'tersedia' AND tersedia_at IS NOT NULL AND dinonaktifkan_at IS NULL)
+             OR (status = 'dihapus' AND tersedia_at IS NOT NULL AND dinonaktifkan_at IS NOT NULL))
+        )");
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('berkas');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_18_004938_create_materi_dan_materi_berkas_tables.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('materi', function (Blueprint $table): void {
+            $table->engine = 'InnoDB';
+            $table->id();
+            $table->foreignId('kelas_kuliah_id')->constrained('kelas_kuliah')->restrictOnDelete()->restrictOnUpdate();
+            $table->unsignedBigInteger('pertemuan_id')->nullable();
+            $table->foreignId('pembuat_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $table->uuid('form_token');
+            $table->char('hash_permohonan', 64);
+            $table->string('judul', 200);
+            $table->text('isi')->nullable();
+            $table->text('tautan_eksternal')->nullable();
+            $table->enum('status', ['draf', 'terbit', 'arsip'])->default('draf');
+            $table->dateTime('terbit_at')->nullable();
+            $table->dateTime('diarsipkan_at')->nullable();
+            $table->unsignedInteger('revisi')->default(1);
+            $table->timestamps();
+            $table->foreign(['pertemuan_id', 'kelas_kuliah_id'], 'materi_pertemuan_kelas_fk')
+                ->references(['id', 'kelas_kuliah_id'])->on('pertemuan')->restrictOnDelete()->restrictOnUpdate();
+            $table->unique(['pembuat_id', 'form_token'], 'materi_form_unique');
+            $table->index(['kelas_kuliah_id', 'status', 'terbit_at'], 'materi_kelas_status_index');
+        });
+        Schema::create('materi_berkas', function (Blueprint $table): void {
+            $table->engine = 'InnoDB';
+            $table->id();
+            $table->foreignId('materi_id')->constrained('materi')->restrictOnDelete()->restrictOnUpdate();
+            $table->foreignId('berkas_id')->constrained('berkas')->restrictOnDelete()->restrictOnUpdate();
+            $table->boolean('aktif')->default(true);
+            $table->dateTime('dilepas_at')->nullable();
+            $table->timestamps();
+            $table->unique(['materi_id', 'berkas_id'], 'materi_berkas_unique');
+            $table->index(['materi_id', 'aktif'], 'materi_berkas_aktif_index');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('materi_berkas');
+        Schema::dropIfExists('materi');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_18_011639_create_kegiatan_dan_kegiatan_berkas_tables.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('kegiatan', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('kelas_kuliah_id')->constrained('kelas_kuliah')->restrictOnDelete()->restrictOnUpdate();
+            $t->unsignedBigInteger('pertemuan_id')->nullable();
+            $t->foreignId('pembuat_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $t->uuid('form_token');
+            $t->char('hash_permohonan', 64);
+            $t->enum('jenis', ['tugas', 'latihan', 'uts', 'uas']);
+            $t->enum('metode', ['pengumpulan_berkas'])->default('pengumpulan_berkas');
+            $t->string('judul', 200);
+            $t->text('instruksi');
+            $t->dateTime('buka_at');
+            $t->dateTime('tenggat_at');
+            $t->unsignedBigInteger('maks_ukuran_byte');
+            $t->unsignedSmallInteger('maks_berkas');
+            $t->json('ekstensi_diizinkan');
+            $t->enum('status', ['draf', 'terbit', 'ditutup', 'arsip'])->default('draf');
+            $t->dateTime('terbit_at')->nullable();
+            $t->dateTime('ditutup_at')->nullable();
+            $t->dateTime('diarsipkan_at')->nullable();
+            $t->unsignedInteger('revisi')->default(1);
+            $t->timestamps();
+            $t->foreign(['pertemuan_id', 'kelas_kuliah_id'], 'kegiatan_pertemuan_kelas_fk')
+                ->references(['id', 'kelas_kuliah_id'])->on('pertemuan')->restrictOnDelete()->restrictOnUpdate();
+            $t->unique(['pembuat_id', 'form_token'], 'kegiatan_form_unique');
+            $t->unique(['id', 'kelas_kuliah_id'], 'kegiatan_identitas_kelas_unique');
+            $t->index(['kelas_kuliah_id', 'status', 'buka_at'], 'kegiatan_kelas_status_index');
+            $t->index(['status', 'tenggat_at'], 'kegiatan_tenggat_index');
+        });
+        Schema::create('kegiatan_berkas', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('kegiatan_id')->constrained('kegiatan')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('berkas_id')->constrained('berkas')->restrictOnDelete()->restrictOnUpdate();
+            $t->boolean('aktif')->default(true);
+            $t->dateTime('dilepas_at')->nullable();
+            $t->timestamps();
+            $t->unique(['kegiatan_id', 'berkas_id'], 'kegiatan_berkas_unique');
+            $t->index(['kegiatan_id', 'aktif'], 'kegiatan_berkas_aktif_index');
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('kegiatan_berkas');
+        Schema::dropIfExists('kegiatan');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_18_014000_create_pengumpulan_dan_pengumpulan_berkas_tables.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('pengumpulan', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('kegiatan_id')->constrained('kegiatan')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('detail_krs_id')->constrained('detail_krs')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('pemilik_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $t->unsignedInteger('versi');
+            $t->uuid('token_draf');
+            $t->char('kunci_kirim', 64)->unique('pengumpulan_kunci_kirim_unique');
+            $t->text('jawaban_teks')->nullable();
+            $t->enum('status', ['draf', 'dikirim'])->default('draf');
+            // 1 ketika draf, NULL ketika dikirim. UNIQUE membolehkan banyak NULL.
+            $t->unsignedTinyInteger('penanda_draf')->nullable()->default(1);
+            $t->dateTime('dikirim_at')->nullable();
+            $t->dateTime('tenggat_snapshot')->nullable();
+            $t->unsignedInteger('revisi_kegiatan')->nullable();
+            $t->char('hash_jawaban', 64)->nullable();
+            $t->unsignedInteger('revisi')->default(1);
+            $t->timestamps();
+            $t->unique(['kegiatan_id', 'detail_krs_id', 'versi'], 'pengumpulan_peserta_versi_unique');
+            $t->unique(['kegiatan_id', 'detail_krs_id', 'penanda_draf'], 'pengumpulan_satu_draf_unique');
+            $t->unique(['pemilik_id', 'token_draf'], 'pengumpulan_token_draf_unique');
+            $t->index(['kegiatan_id', 'detail_krs_id', 'status', 'versi'], 'pengumpulan_efektif_index');
+            $t->index(['pemilik_id', 'kegiatan_id', 'id'], 'pengumpulan_pemilik_index');
+        });
+        Schema::create('pengumpulan_berkas', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('pengumpulan_id')->constrained('pengumpulan')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('berkas_id')->constrained('berkas')->restrictOnDelete()->restrictOnUpdate();
+            $t->string('nama_asli', 255);
+            $t->string('mime_type', 100);
+            $t->string('ekstensi', 10);
+            $t->unsignedBigInteger('ukuran_byte');
+            $t->char('sha256', 64);
+            $t->boolean('aktif')->default(true);
+            $t->dateTime('dilepas_at')->nullable();
+            $t->timestamps();
+            $t->unique(['pengumpulan_id', 'berkas_id'], 'pengumpulan_berkas_unique');
+            $t->index(['pengumpulan_id', 'aktif'], 'pengumpulan_berkas_aktif_index');
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('pengumpulan_berkas');
+        Schema::dropIfExists('pengumpulan');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_19_023321_create_notifikasi_table.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('notifikasi', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('penerima_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $t->string('jenis', 30);
+            $t->string('judul', 200);
+            $t->string('sumber_tabel', 60);
+            $t->unsignedBigInteger('sumber_id');
+            $t->unsignedInteger('sumber_revisi');
+            $t->string('kunci_peristiwa', 190);
+            $t->dateTime('dibaca_at')->nullable();
+            $t->timestamps();
+            $t->unique(['penerima_id', 'kunci_peristiwa'], 'notifikasi_penerima_peristiwa_unik');
+            $t->index(['penerima_id', 'dibaca_at', 'id'], 'notifikasi_kotak_masuk');
+            $t->index(['sumber_tabel', 'sumber_id']);
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('notifikasi');
+    }
+};

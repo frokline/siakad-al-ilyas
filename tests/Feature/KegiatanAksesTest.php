@@ -53,11 +53,25 @@ class KegiatanAksesTest extends KegiatanDatabaseTestCase
     }
     private function ubahStatusKegiatan(Kegiatan $k, string $aksi, array $ganti = []): Kegiatan
     {
+        if (
+            $aksi === 'terbitkan'
+            && $k->status === Kegiatan::TERBIT
+        ) {
+            return $k;
+        }
+
         return app(KelolaKegiatan::class)->status(
             $aksi,
             2,
             $k,
-            array_replace(['versi' => $k->versiForm(), 'alasan' => 'Perubahan status untuk uji.'], $ganti)
+            array_replace(
+                [
+                    'versi' => $k->versiForm(),
+                    'alasan' =>
+                        'Perubahan status untuk uji.',
+                ],
+                $ganti
+            )
         );
     }
     public function test_dosen_tidak_mengelola_kelas_lain(): void
@@ -67,16 +81,24 @@ class KegiatanAksesTest extends KegiatanDatabaseTestCase
         $this->assertTrue($a->kelola($u, 100));
         $this->assertFalse($a->kelola($u, 101));
     }
-    public function test_draf_dan_arsip_disembunyikan_dari_mahasiswa(): void
+    public function test_kegiatan_terbit_dan_arsip(): void
     {
         $k = $this->buat();
         $a = app(AksesKegiatan::class);
         $u = User::findOrFail(3);
-        $this->assertFalse($a->lihat($u, $k));
-        $k = $this->ubahStatusKegiatan($k, 'terbitkan');
-        $this->assertTrue($a->lihat($u, $k));
-        $k = $this->ubahStatusKegiatan($k, 'arsipkan');
-        $this->assertFalse($a->lihat($u, $k));
+
+        $this->assertTrue(
+            $a->lihat($u, $k)
+        );
+
+        $k = $this->ubahStatusKegiatan(
+            $k,
+            'arsipkan'
+        );
+
+        $this->assertFalse(
+            $a->lihat($u, $k)
+        );
     }
     public function test_instruksi_belum_bisa_dibaca_sebelum_waktu_mulai(): void
     {
@@ -95,7 +117,7 @@ class KegiatanAksesTest extends KegiatanDatabaseTestCase
         $html = $view->render();
         $this->assertStringNotContainsString('RAHASIA_SOAL', $html);
         $this->assertStringNotContainsString('/lampiran/', $html);
-        $this->assertStringContainsString('Instruksi dan lampiran tersedia mulai', $html);
+        $this->assertStringContainsString('Isi pembelajaran belum dapat dibuka.', $html);
     }
     public function test_endpoint_lampiran_ditolak_sebelum_mulai(): void
     {
@@ -145,11 +167,29 @@ class KegiatanAksesTest extends KegiatanDatabaseTestCase
         $this->expectException(ValidationException::class);
         $this->buat(['tenggat_lokal' => '2030-01-10T09:00']);
     }
-    public function test_kegiatan_terbit_tidak_bisa_diedit(): void
+    public function test_kegiatan_terbit_dapat_diperbarui_sebagai_revisi(): void
     {
-        $k = $this->ubahStatusKegiatan($this->buat(), 'terbitkan');
-        $this->expectException(AuthorizationException::class);
-        app(KelolaKegiatan::class)->ubah(2, $k, $this->data(['versi' => $k->versiForm()]));
+        $k = $this->buat();
+        $versi = $k->versiForm();
+
+        $hasil = app(KelolaKegiatan::class)->ubah(
+            2,
+            $k,
+            $this->data([
+                'versi' => $versi,
+                'judul' => 'Judul diperbarui',
+            ])
+        );
+
+        $this->assertSame(
+            'Judul diperbarui',
+            $hasil->judul
+        );
+
+        $this->assertSame(
+            2,
+            $hasil->revisi
+        );
     }
     public function test_tenggat_tidak_boleh_diperpendek(): void
     {
@@ -166,11 +206,11 @@ class KegiatanAksesTest extends KegiatanDatabaseTestCase
         $k = $this->ubahStatusKegiatan($k, 'bukaKembali');
         $this->assertTrue($k->jendelaTerbuka());
     }
-    public function test_pemulihan_pascaterbit_tidak_kembali_ke_draf(): void
+    public function test_pemulihan_arsip_kembali_menjadi_terbit(): void
     {
         $k = $this->ubahStatusKegiatan($this->ubahStatusKegiatan($this->buat(), 'terbitkan'), 'arsipkan');
         $k = $this->ubahStatusKegiatan($k, 'pulihkan');
-        $this->assertSame(Kegiatan::DITUTUP, $k->status);
+        $this->assertSame(Kegiatan::TERBIT, $k->status);
         $this->assertNotNull($k->terbit_at);
     }
     public function test_revisi_lama_tidak_menimpa_draf_baru(): void

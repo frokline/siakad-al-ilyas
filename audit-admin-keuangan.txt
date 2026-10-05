@@ -1,0 +1,1150 @@
+
+================================================================================
+FILE: .\app\Services\AksesKeuangan.php
+================================================================================
+<?php
+
+namespace App\Services;
+
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+
+class AksesKeuangan
+{
+    public function lihatMaster(User $user): bool
+    {
+        return $this->memiliki($user, ['admin_keuangan', 'admin_akademik']);
+    }
+    public function kelola(User $user): bool
+    {
+        return $this->memiliki($user, ['admin_keuangan']);
+    }
+    private function memiliki(User $user, array $kode): bool
+    {
+        // Selalu baca status/peran terbaru, bukan relasi yang mungkin tersimpan di sesi/cache model.
+        return User::query()->whereKey($user->id)->where('status', 'aktif')
+            ->whereHas('roles', fn(Builder $q) => $q->whereIn('roles.kode', $kode))->exists();
+    }
+}
+
+
+================================================================================
+FILE: .\app\Http\Controllers\KeuanganDashboardController.php
+================================================================================
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Pembayaran;
+use App\Models\Role;
+use App\Models\Tagihan;
+use App\Models\User;
+use Illuminate\Contracts\View\View;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response;
+
+final class KeuanganDashboardController extends Controller
+{
+    public function index(Request $request): View
+    {
+        $user = $request->user();
+
+        abort_unless(
+            $user instanceof User,
+            Response::HTTP_UNAUTHORIZED
+        );
+
+        $adminKeuanganAktif = User::query()
+            ->whereKey($user->getAuthIdentifier())
+            ->where('status', User::STATUS_AKTIF)
+            ->whereHas(
+                'roles',
+                fn ($query) => $query->where(
+                    'kode',
+                    Role::ADMIN_KEUANGAN
+                )
+            )
+            ->exists();
+
+        abort_unless(
+            $adminKeuanganAktif,
+            Response::HTTP_FORBIDDEN
+        );
+
+        $tagihanTerbit = DB::table('tagihan')
+            ->where('status', Tagihan::TERBIT);
+
+        $pembayaranDiterima = DB::table('pembayaran')
+            ->where('status', Pembayaran::DITERIMA);
+
+        $ringkasan = [
+            'jenis_biaya_aktif' => DB::table('jenis_biaya')
+                ->where('aktif', true)
+                ->count(),
+
+            'tagihan_draf' => DB::table('tagihan')
+                ->where('status', Tagihan::DRAF)
+                ->count(),
+
+            'tagihan_terbit' => (clone $tagihanTerbit)->count(),
+
+            'tagihan_dibatalkan' => DB::table('tagihan')
+                ->where('status', Tagihan::DIBATALKAN)
+                ->count(),
+
+            'nominal_tagihan_terbit' => (int) (clone $tagihanTerbit)
+                ->sum('nominal'),
+
+            'pembayaran_menunggu' => DB::table('pembayaran')
+                ->where('status', Pembayaran::MENUNGGU)
+                ->count(),
+
+            'pembayaran_diterima' => (clone $pembayaranDiterima)
+                ->count(),
+
+            'pembayaran_ditolak' => DB::table('pembayaran')
+                ->where('status', Pembayaran::DITOLAK)
+                ->count(),
+
+            'pembayaran_dibatalkan' => DB::table('pembayaran')
+                ->where('status', Pembayaran::DIBATALKAN)
+                ->count(),
+
+            'nominal_pembayaran_diterima' =>
+                (int) (clone $pembayaranDiterima)
+                    ->sum('nominal_diajukan'),
+        ];
+
+        return view('keuangan.dashboard', [
+            'user' => $user,
+            'ringkasan' => $ringkasan,
+        ]);
+    }
+}
+
+================================================================================
+FILE: .\app\Http\Middleware\AuthenticateKeuangan.php
+================================================================================
+<?php
+
+namespace App\Http\Middleware;
+
+use Illuminate\Auth\Middleware\Authenticate;
+use Illuminate\Http\Request;
+
+class AuthenticateKeuangan extends Authenticate
+{
+    protected function redirectTo(Request $request): ?string
+    {
+        return $request->expectsJson()
+            ? null
+            : route('login');
+    }
+}
+
+
+================================================================================
+FILE: .\app\Policies\JenisBiayaPolicy.php
+================================================================================
+<?php
+
+namespace App\Policies;
+
+use App\Models\JenisBiaya;
+use App\Models\User;
+use App\Services\AksesKeuangan;
+
+class JenisBiayaPolicy
+{
+    public function __construct(private readonly AksesKeuangan $akses) {}
+    public function viewAny(User $u): bool
+    {
+        return $this->akses->lihatMaster($u);
+    }
+    public function view(User $u, JenisBiaya $j): bool
+    {
+        return $this->akses->lihatMaster($u);
+    }
+    public function create(User $u): bool
+    {
+        return $this->akses->kelola($u);
+    }
+    public function update(User $u, JenisBiaya $j): bool
+    {
+        return $this->akses->kelola($u) && $j->aktif;
+    }
+    public function nonaktifkan(User $u, JenisBiaya $j): bool
+    {
+        return $this->akses->kelola($u) && $j->aktif;
+    }
+    public function aktifkan(User $u, JenisBiaya $j): bool
+    {
+        return $this->akses->kelola($u) && ! $j->aktif;
+    }
+}
+
+
+================================================================================
+FILE: .\app\Actions\ProsesVerifikasiPembayaran.php
+================================================================================
+<?php
+
+namespace App\Actions;
+
+use App\Models\AuditLog;
+use App\Models\Pembayaran;
+use App\Models\Tagihan;
+use App\Models\User;
+use App\Models\VerifikasiPembayaran;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+
+final class ProsesVerifikasiPembayaran
+{
+    public function terima(
+        int $userId,
+        Pembayaran $pembayaran,
+        array $input
+    ): Pembayaran {
+        return $this->proses(
+            $userId,
+            $pembayaran,
+            VerifikasiPembayaran::TERIMA,
+            $input
+        );
+    }
+
+    public function tolak(
+        int $userId,
+        Pembayaran $pembayaran,
+        array $input
+    ): Pembayaran {
+        return $this->proses(
+            $userId,
+            $pembayaran,
+            VerifikasiPembayaran::TOLAK,
+            $input
+        );
+    }
+
+    private function proses(
+        int $userId,
+        Pembayaran $bound,
+        string $tindakan,
+        array $input
+    ): Pembayaran {
+        $data = Validator::make($input, [
+            'versi' => [
+                'required',
+                'string',
+                'regex:/\A[a-f0-9]{64}\z/',
+            ],
+            'catatan' => [
+                'required',
+                'string',
+                'min:10',
+                'max:2000',
+                'not_regex:/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/',
+            ],
+            'konfirmasi' => [
+                'required',
+                'accepted',
+            ],
+        ])->validate();
+
+        if (! in_array($tindakan, [
+            VerifikasiPembayaran::TERIMA,
+            VerifikasiPembayaran::TOLAK,
+        ], true)) {
+            throw ValidationException::withMessages([
+                'tindakan' => 'Tindakan verifikasi tidak dikenali.',
+            ]);
+        }
+
+        return DB::transaction(function () use (
+            $userId,
+            $bound,
+            $tindakan,
+            $data
+        ): Pembayaran {
+            $petugas = User::query()
+                ->whereKey($userId)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $peranPetugas = $petugas->roles()
+                ->orderBy('roles.id')
+                ->lockForUpdate()
+                ->get([
+                    'roles.id',
+                    'roles.kode',
+                ]);
+
+            abort_unless(
+                $petugas->status === User::STATUS_AKTIF
+                && $peranPetugas->contains(
+                    'kode',
+                    'admin_keuangan'
+                ),
+                403
+            );
+
+            // Urutan penguncian:
+            // tagihan -> pembayaran.
+            $tagihan = Tagihan::query()
+                ->whereKey($bound->tagihan_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $pembayaran = Pembayaran::query()
+                ->whereKey($bound->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (
+                $pembayaran->tagihan_id !== (int) $tagihan->id
+                || ! hash_equals(
+                    $pembayaran->versiForm(),
+                    (string) $data['versi']
+                )
+            ) {
+                $this->gagal(
+                    'versi',
+                    'Pengajuan pembayaran telah berubah. Muat ulang halaman.'
+                );
+            }
+
+            if ($pembayaran->status !== Pembayaran::MENUNGGU) {
+                $this->gagal(
+                    'status',
+                    'Hanya pembayaran berstatus menunggu yang dapat diverifikasi.'
+                );
+            }
+
+            if ($pembayaran->revisi >= 4294967295) {
+                $this->gagal(
+                    'revisi',
+                    'Batas revisi pembayaran telah tercapai.'
+                );
+            }
+
+            if ($tagihan->status !== Tagihan::TERBIT) {
+                $this->gagal(
+                    'tagihan',
+                    'Tagihan sudah tidak berstatus terbit.'
+                );
+            }
+
+            $statusSebelum = $pembayaran->status;
+            $sebelum = $pembayaran->ringkasanAudit();
+            $catatan = trim((string) $data['catatan']);
+
+            if ($tindakan === VerifikasiPembayaran::TERIMA) {
+                $pembayaran->status = Pembayaran::DITERIMA;
+
+                // Slot tetap dipertahankan agar tagihan yang sudah lunas
+                // tidak dapat menerima pengajuan pembayaran baru.
+                $pembayaran->tagihan_aktif_id = $pembayaran->tagihan_id;
+                $pembayaran->bukti_aktif_sha256 = $pembayaran->bukti_sha256;
+            } else {
+                $pembayaran->status = Pembayaran::DITOLAK;
+
+                // Penolakan melepaskan slot sehingga mahasiswa
+                // dapat mengajukan bukti pembayaran baru.
+                $pembayaran->tagihan_aktif_id = null;
+                $pembayaran->bukti_aktif_sha256 = null;
+            }
+
+            $pembayaran->dibatalkan_at = null;
+            $pembayaran->alasan_batal = null;
+            $pembayaran->revisi++;
+            $pembayaran->save();
+
+            $waktu = now('UTC');
+
+            $verifikasi = new VerifikasiPembayaran();
+            $verifikasi->pembayaran_id = $pembayaran->id;
+            $verifikasi->petugas_id = $petugas->id;
+            $verifikasi->tindakan = $tindakan;
+            $verifikasi->status_sebelum = $statusSebelum;
+            $verifikasi->status_sesudah = $pembayaran->status;
+            $verifikasi->catatan = $catatan;
+            $verifikasi->revisi_pembayaran = $pembayaran->revisi;
+            $verifikasi->waktu = $waktu;
+            $verifikasi->save();
+
+            $audit = new AuditLog();
+            $audit->pelaku_id = $petugas->id;
+            $audit->entitas = 'pembayaran';
+            $audit->entitas_id = $pembayaran->id;
+            $audit->versi_entitas = $pembayaran->revisi;
+            $audit->aksi = $tindakan;
+            $audit->sebelum = $sebelum;
+            $audit->sesudah = $pembayaran->ringkasanAudit();
+            $audit->alasan = $catatan;
+            $audit->waktu = $waktu;
+            $audit->save();
+
+            return $pembayaran->fresh([
+                'tagihan',
+                'pengunggah',
+                'verifikasi',
+            ]);
+        }, 3);
+    }
+
+    private function gagal(string $kolom, string $pesan): never
+    {
+        throw ValidationException::withMessages([
+            $kolom => $pesan,
+        ]);
+    }
+}
+
+================================================================================
+FILE: .\tests\Feature\KeuanganDashboardAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\User;
+use App\Services\TujuanPortal;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Tests\TestCase;
+
+class KeuanganDashboardAksesTest extends TestCase
+{
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        if (! extension_loaded('pdo_sqlite')) {
+            $this->markTestSkipped(
+                'Aktifkan pdo_sqlite untuk pengujian terisolasi.'
+            );
+        }
+
+        $this->app->detectEnvironment(
+            fn (): string => 'testing'
+        );
+
+        config([
+            'database.default' => 'keuangan_dashboard_uji',
+            'database.connections.keuangan_dashboard_uji' => [
+                'driver' => 'sqlite',
+                'database' => ':memory:',
+                'prefix' => '',
+                'foreign_key_constraints' => false,
+            ],
+            'session.driver' => 'array',
+            'cache.default' => 'array',
+        ]);
+
+        DB::purge('keuangan_dashboard_uji');
+
+        $this->buatTabel();
+        $this->buatData();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            DB::purge('keuangan_dashboard_uji');
+        } finally {
+            parent::tearDown();
+        }
+    }
+
+    private function buatTabel(): void
+    {
+        Schema::create('users', function (Blueprint $table): void {
+            $table->id();
+            $table->string('username')->unique();
+            $table->string('email')->nullable();
+            $table->string('password_hash');
+            $table->string('nama');
+            $table->string('telepon')->nullable();
+            $table->string('status');
+            $table->rememberToken();
+            $table->timestamps();
+        });
+
+        Schema::create('roles', function (Blueprint $table): void {
+            $table->id();
+            $table->string('kode')->unique();
+            $table->string('nama');
+            $table->timestamps();
+        });
+
+        Schema::create('user_roles', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('user_id');
+            $table->unsignedBigInteger('role_id');
+            $table->timestamps();
+
+            $table->unique(['user_id', 'role_id']);
+        });
+
+        Schema::create('mahasiswa', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('user_id')->unique();
+            $table->string('nim')->unique();
+            $table->timestamps();
+        });
+
+        Schema::create('dosen', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('user_id')->unique();
+            $table->string('kode_dosen')->unique();
+            $table->string('status');
+            $table->timestamps();
+        });
+
+        Schema::create('jenis_biaya', function (Blueprint $table): void {
+            $table->id();
+            $table->boolean('aktif')->default(true);
+        });
+
+        Schema::create('tagihan', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('nominal');
+            $table->string('status');
+        });
+
+        Schema::create('pembayaran', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('nominal_diajukan');
+            $table->string('status');
+        });
+    }
+
+    private function buatData(): void
+    {
+        $waktu = now();
+
+        DB::table('roles')->insert([
+            [
+                'id' => 1,
+                'kode' => 'admin_keuangan',
+                'nama' => 'Admin Keuangan',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 2,
+                'kode' => 'admin_akademik',
+                'nama' => 'Admin Akademik',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 3,
+                'kode' => 'dosen',
+                'nama' => 'Dosen',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 4,
+                'kode' => 'mahasiswa',
+                'nama' => 'Mahasiswa',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+        ]);
+
+        DB::table('users')->insert([
+            [
+                'id' => 1,
+                'username' => 'keuangan',
+                'email' => 'keuangan@example.test',
+                'password_hash' => 'hash-uji',
+                'nama' => 'Administrator Keuangan',
+                'telepon' => null,
+                'status' => 'aktif',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 2,
+                'username' => 'akademik',
+                'email' => 'akademik@example.test',
+                'password_hash' => 'hash-uji',
+                'nama' => 'Administrator Akademik',
+                'telepon' => null,
+                'status' => 'aktif',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 3,
+                'username' => 'dosen',
+                'email' => 'dosen@example.test',
+                'password_hash' => 'hash-uji',
+                'nama' => 'Dosen Aktif',
+                'telepon' => null,
+                'status' => 'aktif',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 4,
+                'username' => 'mahasiswa',
+                'email' => 'mahasiswa@example.test',
+                'password_hash' => 'hash-uji',
+                'nama' => 'Mahasiswa Aktif',
+                'telepon' => null,
+                'status' => 'aktif',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 5,
+                'username' => 'keuangan-nonaktif',
+                'email' => 'nonaktif@example.test',
+                'password_hash' => 'hash-uji',
+                'nama' => 'Keuangan Nonaktif',
+                'telepon' => null,
+                'status' => 'nonaktif',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'id' => 6,
+                'username' => 'keuangan-xss',
+                'email' => 'xss@example.test',
+                'password_hash' => 'hash-uji',
+                'nama' => '<script>alert("x")</script>',
+                'telepon' => null,
+                'status' => 'aktif',
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+        ]);
+
+        DB::table('user_roles')->insert([
+            [
+                'user_id' => 1,
+                'role_id' => 1,
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'user_id' => 2,
+                'role_id' => 2,
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'user_id' => 3,
+                'role_id' => 3,
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'user_id' => 4,
+                'role_id' => 4,
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'user_id' => 5,
+                'role_id' => 1,
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+            [
+                'user_id' => 6,
+                'role_id' => 1,
+                'created_at' => $waktu,
+                'updated_at' => $waktu,
+            ],
+        ]);
+
+        DB::table('dosen')->insert([
+            'id' => 31,
+            'user_id' => 3,
+            'kode_dosen' => 'DSN-UJI',
+            'status' => 'aktif',
+            'created_at' => $waktu,
+            'updated_at' => $waktu,
+        ]);
+
+        DB::table('mahasiswa')->insert([
+            'id' => 41,
+            'user_id' => 4,
+            'nim' => 'MHS-UJI',
+            'created_at' => $waktu,
+            'updated_at' => $waktu,
+        ]);
+
+        DB::table('jenis_biaya')->insert([
+            ['id' => 1, 'aktif' => true],
+            ['id' => 2, 'aktif' => true],
+            ['id' => 3, 'aktif' => false],
+        ]);
+
+        DB::table('tagihan')->insert([
+            [
+                'id' => 1,
+                'nominal' => 500000,
+                'status' => 'terbit',
+            ],
+            [
+                'id' => 2,
+                'nominal' => 750000,
+                'status' => 'terbit',
+            ],
+            [
+                'id' => 3,
+                'nominal' => 300000,
+                'status' => 'draf',
+            ],
+            [
+                'id' => 4,
+                'nominal' => 250000,
+                'status' => 'dibatalkan',
+            ],
+        ]);
+
+        DB::table('pembayaran')->insert([
+            [
+                'id' => 1,
+                'nominal_diajukan' => 500000,
+                'status' => 'menunggu',
+            ],
+            [
+                'id' => 2,
+                'nominal_diajukan' => 750000,
+                'status' => 'diterima',
+            ],
+            [
+                'id' => 3,
+                'nominal_diajukan' => 300000,
+                'status' => 'ditolak',
+            ],
+            [
+                'id' => 4,
+                'nominal_diajukan' => 250000,
+                'status' => 'dibatalkan',
+            ],
+        ]);
+    }
+
+    public function test_admin_keuangan_dapat_membuka_dashboard(): void
+    {
+        $this->actingAs(User::findOrFail(1))
+            ->get(route('keuangan.dashboard'))
+            ->assertOk()
+            ->assertSee('Dashboard Admin Keuangan')
+            ->assertSee('Administrator Keuangan')
+            ->assertSee('Menunggu verifikasi');
+    }
+
+    public function test_ringkasan_keuangan_dihitung_benar(): void
+    {
+        $response = $this->actingAs(User::findOrFail(1))
+            ->get(route('keuangan.dashboard'));
+
+        $response
+            ->assertOk()
+            ->assertViewHas('ringkasan', function (array $ringkasan): bool {
+                return $ringkasan === [
+                    'jenis_biaya_aktif' => 2,
+                    'tagihan_draf' => 1,
+                    'tagihan_terbit' => 2,
+                    'tagihan_dibatalkan' => 1,
+                    'nominal_tagihan_terbit' => 1250000,
+                    'pembayaran_menunggu' => 1,
+                    'pembayaran_diterima' => 1,
+                    'pembayaran_ditolak' => 1,
+                    'pembayaran_dibatalkan' => 1,
+                    'nominal_pembayaran_diterima' => 750000,
+                ];
+            })
+            ->assertSee('Rp1.250.000')
+            ->assertSee('Rp750.000');
+    }
+
+    public function test_admin_akademik_ditolak(): void
+    {
+        $this->actingAs(User::findOrFail(2))
+            ->get(route('keuangan.dashboard'))
+            ->assertForbidden();
+    }
+
+    public function test_dosen_ditolak(): void
+    {
+        $this->actingAs(User::findOrFail(3))
+            ->get(route('keuangan.dashboard'))
+            ->assertForbidden();
+    }
+
+    public function test_mahasiswa_ditolak(): void
+    {
+        $this->actingAs(User::findOrFail(4))
+            ->get(route('keuangan.dashboard'))
+            ->assertForbidden();
+    }
+
+    public function test_admin_keuangan_nonaktif_ditolak(): void
+    {
+        $this->actingAs(User::findOrFail(5))
+            ->get(route('keuangan.dashboard'))
+            ->assertForbidden();
+    }
+
+    public function test_pencabutan_role_memblokir_dashboard(): void
+    {
+        $user = User::findOrFail(1);
+
+        DB::table('user_roles')
+            ->where('user_id', $user->id)
+            ->delete();
+
+        $this->actingAs($user)
+            ->get(route('keuangan.dashboard'))
+            ->assertForbidden();
+    }
+
+    public function test_nama_admin_keuangan_diamankan_dari_xss(): void
+    {
+        $this->actingAs(User::findOrFail(6))
+            ->get(route('keuangan.dashboard'))
+            ->assertOk()
+            ->assertSee('&lt;script&gt;', false)
+            ->assertDontSee('<script>', false);
+    }
+
+    public function test_tujuan_portal_keuangan_menuju_dashboard(): void
+    {
+        $tujuan = app(TujuanPortal::class)
+            ->namaRoute(User::findOrFail(1));
+
+        $this->assertSame(
+            'keuangan.dashboard',
+            $tujuan
+        );
+    }
+}
+
+================================================================================
+FILE: .\tests\Feature\VerifikasiPembayaranAksesTest.php
+================================================================================
+<?php
+
+namespace Tests\Feature;
+
+use App\Actions\ProsesVerifikasiPembayaran;
+use App\Models\Pembayaran;
+use App\Models\User;
+use App\Models\VerifikasiPembayaran;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+
+class VerifikasiPembayaranAksesTest extends PembayaranDatabaseTestCase
+{
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $migration = glob(
+            database_path(
+                'migrations/*_create_verifikasi_pembayaran_table.php'
+            )
+        );
+
+        $this->assertCount(
+            1,
+            $migration,
+            'Harus ada tepat satu migration verifikasi pembayaran.'
+        );
+
+        (require $migration[0])->up();
+    }
+
+    private function dataVerifikasi(
+        Pembayaran $pembayaran,
+        array $ubah = []
+    ): array {
+        return array_replace([
+            'versi' => $pembayaran->versiForm(),
+            'catatan' => 'Bukti transfer sudah diperiksa dengan teliti.',
+            'konfirmasi' => '1',
+        ], $ubah);
+    }
+
+    public function test_admin_keuangan_dapat_menerima_pembayaran(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        $hasil = app(ProsesVerifikasiPembayaran::class)->terima(
+            1,
+            $pembayaran,
+            $this->dataVerifikasi($pembayaran)
+        );
+
+        $this->assertSame(
+            Pembayaran::DITERIMA,
+            $hasil->status
+        );
+
+        $this->assertSame(
+            (int) $hasil->tagihan_id,
+            $hasil->tagihan_aktif_id
+        );
+
+        $this->assertSame(
+            $hasil->bukti_sha256,
+            $hasil->bukti_aktif_sha256
+        );
+
+        $this->assertSame(2, $hasil->revisi);
+        $this->assertSame(1, $hasil->verifikasi()->count());
+        $this->assertSame(2, $hasil->audits()->count());
+
+        $verifikasi = $hasil->verifikasi()->firstOrFail();
+
+        $this->assertSame(
+            VerifikasiPembayaran::TERIMA,
+            $verifikasi->tindakan
+        );
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $verifikasi->status_sebelum
+        );
+
+        $this->assertSame(
+            Pembayaran::DITERIMA,
+            $verifikasi->status_sesudah
+        );
+
+        $this->assertSame(
+            1,
+            $verifikasi->petugas_id
+        );
+
+        $this->assertSame(
+            2,
+            $verifikasi->revisi_pembayaran
+        );
+    }
+
+    public function test_penolakan_melepaskan_slot_pengajuan(): void
+    {
+        $tagihan = $this->tagihanTerbit();
+        $pembayaran = $this->ajukan($tagihan);
+
+        $hasil = app(ProsesVerifikasiPembayaran::class)->tolak(
+            1,
+            $pembayaran,
+            $this->dataVerifikasi($pembayaran, [
+                'catatan' => 'Nominal pada bukti transfer tidak terbaca jelas.',
+            ])
+        );
+
+        $this->assertSame(
+            Pembayaran::DITOLAK,
+            $hasil->status
+        );
+
+        $this->assertNull($hasil->tagihan_aktif_id);
+        $this->assertNull($hasil->bukti_aktif_sha256);
+        $this->assertSame(2, $hasil->revisi);
+
+        $pengajuanBaru = $this->ajukan($tagihan);
+
+        $this->assertNotSame(
+            $hasil->id,
+            $pengajuanBaru->id
+        );
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $pengajuanBaru->status
+        );
+    }
+
+    public function test_admin_akademik_tidak_dapat_memverifikasi(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        try {
+            app(ProsesVerifikasiPembayaran::class)->terima(
+                2,
+                $pembayaran,
+                $this->dataVerifikasi($pembayaran)
+            );
+
+            $this->fail(
+                'Admin Akademik seharusnya tidak dapat memverifikasi pembayaran.'
+            );
+        } catch (HttpException $exception) {
+            $this->assertSame(
+                403,
+                $exception->getStatusCode()
+            );
+        }
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $pembayaran->fresh()->status
+        );
+
+        $this->assertSame(
+            0,
+            VerifikasiPembayaran::query()->count()
+        );
+    }
+
+    public function test_mahasiswa_tidak_dapat_memverifikasi_milik_sendiri(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        $this->actingAs(
+            User::findOrFail(4),
+            'web'
+        )->post(
+            route('pembayaran.terima', $pembayaran),
+            $this->dataVerifikasi($pembayaran)
+        )->assertForbidden();
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $pembayaran->fresh()->status
+        );
+    }
+
+    public function test_form_lama_ditolak_setelah_pembayaran_berubah(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        $dataLama = $this->dataVerifikasi($pembayaran);
+
+        app(ProsesVerifikasiPembayaran::class)->terima(
+            1,
+            $pembayaran,
+            $dataLama
+        );
+
+        $this->expectException(
+            ValidationException::class
+        );
+
+        app(ProsesVerifikasiPembayaran::class)->tolak(
+            1,
+            $pembayaran,
+            $dataLama
+        );
+    }
+
+    public function test_http_admin_keuangan_dapat_memverifikasi(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        $this->actingAs(
+            User::findOrFail(1),
+            'web'
+        )->get(
+            route('pembayaran.show', $pembayaran)
+        )->assertOk()
+            ->assertSee('Terima pembayaran')
+            ->assertSee('Tolak pembayaran');
+
+        $this->post(
+            route('pembayaran.terima', $pembayaran),
+            $this->dataVerifikasi($pembayaran)
+        )->assertRedirect(
+            route('pembayaran.show', $pembayaran)
+        );
+
+        $this->assertSame(
+            Pembayaran::DITERIMA,
+            $pembayaran->fresh()->status
+        );
+    }
+
+    public function test_http_suntikan_status_dan_petugas_ditolak(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        $this->actingAs(
+            User::findOrFail(1),
+            'web'
+        )->postJson(
+            route('pembayaran.terima', $pembayaran),
+            [
+                ...$this->dataVerifikasi($pembayaran),
+                'status' => Pembayaran::DITERIMA,
+                'petugas_id' => 999,
+                'revisi' => 999,
+            ]
+        )->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'status',
+                'petugas_id',
+                'revisi',
+            ]);
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $pembayaran->fresh()->status
+        );
+    }
+
+    public function test_riwayat_verifikasi_tidak_dapat_diubah_atau_dihapus(): void
+    {
+        $pembayaran = $this->ajukan(
+            $this->tagihanTerbit()
+        );
+
+        $hasil = app(ProsesVerifikasiPembayaran::class)->terima(
+            1,
+            $pembayaran,
+            $this->dataVerifikasi($pembayaran)
+        );
+
+        $verifikasi = $hasil->verifikasi()->firstOrFail();
+
+        try {
+            DB::transaction(function () use ($verifikasi): void {
+                $verifikasi->catatan = 'Catatan ini mencoba diubah.';
+                $verifikasi->save();
+            });
+
+            $this->fail(
+                'Riwayat verifikasi seharusnya tidak dapat diubah.'
+            );
+        } catch (\LogicException $exception) {
+            $this->assertNotEmpty(
+                $exception->getMessage()
+            );
+        }
+
+        $this->expectException(
+            \LogicException::class
+        );
+
+        $verifikasi->delete();
+    }
+}

@@ -53,7 +53,7 @@ class DetailKrs extends Model
                 self::TERDAFTAR => $detail->aktif_at === null && $detail->batal_at === null,
                 self::AKTIF => $detail->aktif_at !== null && $detail->batal_at === null,
                 self::DIBATALKAN => $detail->batal_at !== null
-                    && ($detail->aktif_at === null || $detail->batal_at->greaterThanOrEqualTo($detail->aktif_at)),
+                    && ($detail->aktif_at === null || $detail->batal_at->gte($detail->aktif_at)),
                 default => false,
             };
 

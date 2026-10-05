@@ -79,7 +79,7 @@ class AksesPengumpulan
                     $own->whereRaw('1 = 0');
                 }
             })->orWhere(function (Builder $staff) use ($kelas): void {
-                $staff->where('pengumpulan.status', Pengumpulan::DIKIRIM)
+                $staff->where('pengumpulan.status', Pengumpulan::TERKIRIM)
                     ->whereHas('kegiatan', fn(Builder $k) => $k->whereIn('kelas_kuliah_id', $kelas));
             });
         });

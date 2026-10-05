@@ -1,0 +1,276 @@
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_17_064106_create_berkas_table.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        foreach (['users', 'audit_log'] as $induk) {
+            if (! Schema::hasTable($induk)) {
+                throw new RuntimeException("Tabel induk {$induk} belum tersedia.");
+            }
+        }
+        Schema::create('berkas', function (Blueprint $table): void {
+            $table->engine = 'InnoDB';
+            $table->id();
+            $table->foreignId('diunggah_oleh')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $table->uuid('upload_token');
+            $table->string('storage_disk', 40);
+            $table->string('object_key', 500);
+            $table->string('nama_asli', 255);
+            $table->string('label', 200);
+            $table->text('keterangan')->nullable();
+            $table->string('mime_type', 150);
+            $table->string('ekstensi', 10);
+            $table->unsignedBigInteger('ukuran_byte');
+            $table->char('sha256', 64);
+            $table->enum('pemeriksaan', ['format', 'clamav']);
+            $table->dateTime('diperiksa_at');
+            $table->enum('status', ['menunggu', 'tersedia', 'ditolak', 'dihapus'])->default('menunggu');
+            $table->string('pesan_status', 255)->nullable();
+            $table->dateTime('tersedia_at')->nullable();
+            $table->dateTime('dinonaktifkan_at')->nullable();
+            $table->unsignedInteger('revisi')->default(1);
+            $table->timestamps();
+            $table->unique(['diunggah_oleh', 'upload_token'], 'berkas_upload_unique');
+            $table->unique(['storage_disk', 'object_key'], 'berkas_object_unique');
+            $table->index(['diunggah_oleh', 'status', 'id'], 'berkas_pemilik_status_index');
+            $table->index(['status', 'created_at'], 'berkas_proses_index');
+        });
+        DB::statement("ALTER TABLE berkas ADD CONSTRAINT berkas_metadata_valid CHECK (
+            ukuran_byte > 0 AND revisi > 0 AND
+            ((status IN ('menunggu', 'ditolak') AND tersedia_at IS NULL AND dinonaktifkan_at IS NULL)
+             OR (status = 'tersedia' AND tersedia_at IS NOT NULL AND dinonaktifkan_at IS NULL)
+             OR (status = 'dihapus' AND tersedia_at IS NOT NULL AND dinonaktifkan_at IS NOT NULL))
+        )");
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('berkas');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_18_004938_create_materi_dan_materi_berkas_tables.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('materi', function (Blueprint $table): void {
+            $table->engine = 'InnoDB';
+            $table->id();
+            $table->foreignId('kelas_kuliah_id')->constrained('kelas_kuliah')->restrictOnDelete()->restrictOnUpdate();
+            $table->unsignedBigInteger('pertemuan_id')->nullable();
+            $table->foreignId('pembuat_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $table->uuid('form_token');
+            $table->char('hash_permohonan', 64);
+            $table->string('judul', 200);
+            $table->text('isi')->nullable();
+            $table->text('tautan_eksternal')->nullable();
+            $table->enum('status', ['draf', 'terbit', 'arsip'])->default('draf');
+            $table->dateTime('terbit_at')->nullable();
+            $table->dateTime('diarsipkan_at')->nullable();
+            $table->unsignedInteger('revisi')->default(1);
+            $table->timestamps();
+            $table->foreign(['pertemuan_id', 'kelas_kuliah_id'], 'materi_pertemuan_kelas_fk')
+                ->references(['id', 'kelas_kuliah_id'])->on('pertemuan')->restrictOnDelete()->restrictOnUpdate();
+            $table->unique(['pembuat_id', 'form_token'], 'materi_form_unique');
+            $table->index(['kelas_kuliah_id', 'status', 'terbit_at'], 'materi_kelas_status_index');
+        });
+        Schema::create('materi_berkas', function (Blueprint $table): void {
+            $table->engine = 'InnoDB';
+            $table->id();
+            $table->foreignId('materi_id')->constrained('materi')->restrictOnDelete()->restrictOnUpdate();
+            $table->foreignId('berkas_id')->constrained('berkas')->restrictOnDelete()->restrictOnUpdate();
+            $table->boolean('aktif')->default(true);
+            $table->dateTime('dilepas_at')->nullable();
+            $table->timestamps();
+            $table->unique(['materi_id', 'berkas_id'], 'materi_berkas_unique');
+            $table->index(['materi_id', 'aktif'], 'materi_berkas_aktif_index');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('materi_berkas');
+        Schema::dropIfExists('materi');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_18_011639_create_kegiatan_dan_kegiatan_berkas_tables.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('kegiatan', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('kelas_kuliah_id')->constrained('kelas_kuliah')->restrictOnDelete()->restrictOnUpdate();
+            $t->unsignedBigInteger('pertemuan_id')->nullable();
+            $t->foreignId('pembuat_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $t->uuid('form_token');
+            $t->char('hash_permohonan', 64);
+            $t->enum('jenis', ['tugas', 'latihan', 'uts', 'uas']);
+            $t->enum('metode', ['pengumpulan_berkas'])->default('pengumpulan_berkas');
+            $t->string('judul', 200);
+            $t->text('instruksi');
+            $t->dateTime('buka_at');
+            $t->dateTime('tenggat_at');
+            $t->unsignedBigInteger('maks_ukuran_byte');
+            $t->unsignedSmallInteger('maks_berkas');
+            $t->json('ekstensi_diizinkan');
+            $t->enum('status', ['draf', 'terbit', 'ditutup', 'arsip'])->default('draf');
+            $t->dateTime('terbit_at')->nullable();
+            $t->dateTime('ditutup_at')->nullable();
+            $t->dateTime('diarsipkan_at')->nullable();
+            $t->unsignedInteger('revisi')->default(1);
+            $t->timestamps();
+            $t->foreign(['pertemuan_id', 'kelas_kuliah_id'], 'kegiatan_pertemuan_kelas_fk')
+                ->references(['id', 'kelas_kuliah_id'])->on('pertemuan')->restrictOnDelete()->restrictOnUpdate();
+            $t->unique(['pembuat_id', 'form_token'], 'kegiatan_form_unique');
+            $t->unique(['id', 'kelas_kuliah_id'], 'kegiatan_identitas_kelas_unique');
+            $t->index(['kelas_kuliah_id', 'status', 'buka_at'], 'kegiatan_kelas_status_index');
+            $t->index(['status', 'tenggat_at'], 'kegiatan_tenggat_index');
+        });
+        Schema::create('kegiatan_berkas', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('kegiatan_id')->constrained('kegiatan')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('berkas_id')->constrained('berkas')->restrictOnDelete()->restrictOnUpdate();
+            $t->boolean('aktif')->default(true);
+            $t->dateTime('dilepas_at')->nullable();
+            $t->timestamps();
+            $t->unique(['kegiatan_id', 'berkas_id'], 'kegiatan_berkas_unique');
+            $t->index(['kegiatan_id', 'aktif'], 'kegiatan_berkas_aktif_index');
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('kegiatan_berkas');
+        Schema::dropIfExists('kegiatan');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_18_014000_create_pengumpulan_dan_pengumpulan_berkas_tables.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('pengumpulan', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('kegiatan_id')->constrained('kegiatan')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('detail_krs_id')->constrained('detail_krs')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('pemilik_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $t->unsignedInteger('versi');
+            $t->uuid('token_draf');
+            $t->char('kunci_kirim', 64)->unique('pengumpulan_kunci_kirim_unique');
+            $t->text('jawaban_teks')->nullable();
+            $t->enum('status', ['draf', 'dikirim'])->default('draf');
+            // 1 ketika draf, NULL ketika dikirim. UNIQUE membolehkan banyak NULL.
+            $t->unsignedTinyInteger('penanda_draf')->nullable()->default(1);
+            $t->dateTime('dikirim_at')->nullable();
+            $t->dateTime('tenggat_snapshot')->nullable();
+            $t->unsignedInteger('revisi_kegiatan')->nullable();
+            $t->char('hash_jawaban', 64)->nullable();
+            $t->unsignedInteger('revisi')->default(1);
+            $t->timestamps();
+            $t->unique(['kegiatan_id', 'detail_krs_id', 'versi'], 'pengumpulan_peserta_versi_unique');
+            $t->unique(['kegiatan_id', 'detail_krs_id', 'penanda_draf'], 'pengumpulan_satu_draf_unique');
+            $t->unique(['pemilik_id', 'token_draf'], 'pengumpulan_token_draf_unique');
+            $t->index(['kegiatan_id', 'detail_krs_id', 'status', 'versi'], 'pengumpulan_efektif_index');
+            $t->index(['pemilik_id', 'kegiatan_id', 'id'], 'pengumpulan_pemilik_index');
+        });
+        Schema::create('pengumpulan_berkas', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('pengumpulan_id')->constrained('pengumpulan')->restrictOnDelete()->restrictOnUpdate();
+            $t->foreignId('berkas_id')->constrained('berkas')->restrictOnDelete()->restrictOnUpdate();
+            $t->string('nama_asli', 255);
+            $t->string('mime_type', 100);
+            $t->string('ekstensi', 10);
+            $t->unsignedBigInteger('ukuran_byte');
+            $t->char('sha256', 64);
+            $t->boolean('aktif')->default(true);
+            $t->dateTime('dilepas_at')->nullable();
+            $t->timestamps();
+            $t->unique(['pengumpulan_id', 'berkas_id'], 'pengumpulan_berkas_unique');
+            $t->index(['pengumpulan_id', 'aktif'], 'pengumpulan_berkas_aktif_index');
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('pengumpulan_berkas');
+        Schema::dropIfExists('pengumpulan');
+    }
+};
+
+
+==========================================================================================
+FILE: D:\xampp\htdocs\siakad-ilyas\database\migrations\2026_09_19_023321_create_notifikasi_table.php
+==========================================================================================
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('notifikasi', function (Blueprint $t): void {
+            $t->engine = 'InnoDB';
+            $t->id();
+            $t->foreignId('penerima_id')->constrained('users')->restrictOnDelete()->restrictOnUpdate();
+            $t->string('jenis', 30);
+            $t->string('judul', 200);
+            $t->string('sumber_tabel', 60);
+            $t->unsignedBigInteger('sumber_id');
+            $t->unsignedInteger('sumber_revisi');
+            $t->string('kunci_peristiwa', 190);
+            $t->dateTime('dibaca_at')->nullable();
+            $t->timestamps();
+            $t->unique(['penerima_id', 'kunci_peristiwa'], 'notifikasi_penerima_peristiwa_unik');
+            $t->index(['penerima_id', 'dibaca_at', 'id'], 'notifikasi_kotak_masuk');
+            $t->index(['sumber_tabel', 'sumber_id']);
+        });
+    }
+    public function down(): void
+    {
+        Schema::dropIfExists('notifikasi');
+    }
+};

@@ -9,6 +9,6 @@ class AuthenticateSurat extends Authenticate
 {
     protected function redirectTo(Request $request): ?string
     {
-        return $request->expectsJson() ? null : route('berkas.login');
+        return $request->expectsJson() ? null : route('login');
     }
 }
