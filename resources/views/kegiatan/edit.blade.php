@@ -9,7 +9,7 @@
     </div>
 
     <form method="post" action="{{ route('kegiatan.update', $kegiatan) }}" enctype="multipart/form-data"
-        class="max-w-3xl space-y-6">
+        class="w-full space-y-6">
         @csrf
         @method('PATCH')
         <input type="hidden" name="versi" value="{{ old('versi', $kegiatan->versiForm()) }}">

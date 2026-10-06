@@ -280,17 +280,15 @@ final class KegiatanRequest extends FormRequest
 
                 try {
                     $buka = app(WaktuKegiatan::class)
-                        ->dariInputLokal(
-                            (string) $this->input(
-                                'buka_lokal'
-                            )
+                        ->dariForm(
+                            (string) $this->input('buka_lokal'),
+                            'buka_lokal'
                         );
 
                     $tenggat = app(WaktuKegiatan::class)
-                        ->dariInputLokal(
-                            (string) $this->input(
-                                'tenggat_lokal'
-                            )
+                        ->dariForm(
+                            (string) $this->input('tenggat_lokal'),
+                            'tenggat_lokal'
                         );
                 } catch (\Throwable) {
                     $validator
