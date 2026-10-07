@@ -32,7 +32,7 @@
                     <div x-show="open" x-cloak
                         class="absolute right-0 mt-2 w-48 rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 z-20">
                         <div class="py-1">
-                            <a href="{{ route('materi.index', ['kelas' => $kelas->id]) }}"
+                            <a href="{{ route('kegiatan.index', ['kelas' => $kelas->id]) }}"
                                 class="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100">Kelola Materi</a>
                             <a href="{{ route('kegiatan.index', ['kelas' => $kelas->id]) }}"
                                 class="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100">Kelola Tugas & Ujian</a>
