@@ -44,8 +44,10 @@
 
         @if (auth()->user()?->hasRole(\App\Models\Role::ADMIN_AKADEMIK))
             @include('partials.sidebar-admin')
-        @else
+        @elseif (auth()->user()?->hasRole(\App\Models\Role::DOSEN))
             @include('partials.sidebar-dosen')
+        @else
+            @include('partials.sidebar-mahasiswa')
         @endif
 
         <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
