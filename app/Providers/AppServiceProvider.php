@@ -242,11 +242,6 @@ class AppServiceProvider extends ServiceProvider
                 ->by('berkas-upload:' . $request->user()->id)
         );
 
-        \Illuminate\Support\Facades\Gate::policy(\App\Models\Materi::class, \App\Policies\MateriPolicy::class);
-        \Illuminate\Support\Facades\Gate::define(
-            'akses-materi',
-            fn(\App\Models\User $user): bool => app(\App\Services\AksesMateri::class)->masuk($user)
-        );
 
         // Tambahkan DI DALAM boot() AppServiceProvider; pertahankan kode lama.
         \Illuminate\Support\Facades\Gate::policy(\App\Models\Kegiatan::class, \App\Policies\KegiatanPolicy::class);

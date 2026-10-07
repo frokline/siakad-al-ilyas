@@ -524,39 +524,6 @@ Route::prefix('berkas')->name('berkas.')
             });
     });
 
-/*
-|--------------------------------------------------------------------------
-| 6. MATERI
-|--------------------------------------------------------------------------
-*/
-Route::prefix('materi')->name('materi.')
-    ->middleware([
-        AuthenticateMateri::class . ':web',
-        'auth.session',
-        'cache.headers:no_store;private',
-        'can:akses-materi',
-    ])
-    ->controller(MateriController::class)
-    ->where(['materi' => '[0-9]+', 'lampiran' => '[0-9]+'])
-    ->group(function (): void {
-        Route::get('/', 'index')->name('index');
-        Route::get('/kelas', 'kelas')->name('kelas');
-        Route::get('/create', 'create')->name('create');
-        Route::get('/{materi}', 'show')->name('show');
-        Route::get('/{materi}/edit', 'edit')->name('edit');
-        Route::get('/{materi}/lampiran/{lampiran}/unduh', 'unduh')
-            ->middleware(['signed', 'throttle:30,1'])
-            ->name('unduh');
-        Route::middleware('throttle:30,1')->group(function (): void {
-            Route::post('/', 'store')->name('store');
-            Route::patch('/{materi}', 'update')->name('update');
-            Route::post('/{materi}/terbitkan', 'terbitkan')->name('terbitkan');
-            Route::post('/{materi}/tarik', 'tarik')->name('tarik');
-            Route::post('/{materi}/arsipkan', 'arsipkan')->name('arsipkan');
-            Route::post('/{materi}/pulihkan', 'pulihkan')->name('pulihkan');
-            Route::post('/{materi}/lampiran/{lampiran}/tautan', 'tautan')->name('tautan');
-        });
-    });
 
 /*
 |--------------------------------------------------------------------------

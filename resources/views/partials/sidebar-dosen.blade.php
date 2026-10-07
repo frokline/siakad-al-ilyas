@@ -18,7 +18,6 @@
     $menu = [
         ['', 'portal.dosen.kelas.index', 'portal.dosen.*', 'Kelas Saya', 'kelas'],
         ['akses-presensi', 'presensi.index', 'presensi.*', 'Presensi', 'presensi'],
-        ['akses-materi', 'materi.index', 'materi.*', 'Materi', 'materi'],
         ['akses-kegiatan', 'kegiatan.index', 'kegiatan.*', 'Tugas & Kegiatan', 'kegiatan'],
         ['akses-pengumpulan', 'pengumpulan.index', 'pengumpulan.*', 'Pengumpulan', 'pengumpulan'],
         ['akses-berkas', 'berkas.index', 'berkas.*', 'Berkas', 'berkas'],
