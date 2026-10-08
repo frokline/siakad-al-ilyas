@@ -65,9 +65,9 @@
                         <tr class="hover:bg-slate-50/80 transition-colors group">
                             <td class="px-6 py-4">
                                 <strong
-                                    class="font-bold text-slate-800 font-mono text-xs group-hover:text-siakad-dark transition-colors block">{{ $sesi->kelasKuliah->kode }}</strong>
+                                    class="font-bold text-slate-800 font-mono text-xs group-hover:text-siakad-dark transition-colors block">{{ $sesi->kelasKuliah?->kode ?? '—' }}</strong>
                                 <span
-                                    class="text-slate-700 text-sm mt-0.5 block">{{ $sesi->kelasKuliah->nama_mk_snapshot }}</span>
+                                    class="text-slate-700 text-sm mt-0.5 block">{{ $sesi->kelasKuliah?->nama_mk_snapshot ?? 'Nama MK tidak tersedia' }}</span>
                             </td>
                             <td class="px-6 py-4">
                                 <div class="font-bold text-slate-800">Pertemuan {{ $sesi->nomor }}</div>
@@ -75,9 +75,9 @@
                             </td>
                             <td class="px-6 py-4 text-xs text-slate-700">
                                 <div class="font-medium">
-                                    {{ $sesi->mulai_rencana->setTimezone($zona)->format('d-m-Y H:i') }}</div>
+                                    {{ $sesi->mulai_rencana ? $sesi->mulai_rencana->setTimezone($zona)->format('d-m-Y H:i') : '—' }}</div>
                                 <span class="text-slate-400 mt-0.5 block">s.d.
-                                    {{ $sesi->selesai_rencana->setTimezone($zona)->format('H:i') }}</span>
+                                    {{ $sesi->selesai_rencana ? $sesi->selesai_rencana->setTimezone($zona)->format('H:i') : '—' }}</span>
                             </td>
                             <td class="px-6 py-4 text-center">
                                 <?php
