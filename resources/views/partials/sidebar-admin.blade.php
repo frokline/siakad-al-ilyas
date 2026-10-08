@@ -139,7 +139,7 @@
         </div>
 
         <!-- Pemantauan Dropdown -->
-        <div x-data="{ open: {{ request()->routeIs('admin.pertemuan*') || request()->routeIs('presensi.*') ? 'true' : 'false' }} }">
+        <div x-data="{ open: {{ request()->routeIs('admin.pertemuan*') || request()->routeIs('presensi.*') || request()->routeIs('kalender.*') ? 'true' : 'false' }} }">
             <button @click="open = !open"
                 class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-emerald-100 transition-colors hover:bg-white/10 hover:text-white">
                 <div class="flex items-center gap-3">
@@ -162,6 +162,11 @@
                 <a href="{{ route('presensi.index') }}"
                     class="block rounded-md py-2 text-xs {{ request()->routeIs('presensi.*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Rekap
                     Presensi</a>
+                <a href="{{ route('kalender.index') }}"
+                    class="block rounded-md py-2 text-xs {{ request()->routeIs('kalender.*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Kalender
+                    Akademik</a>
+                <a href="{{ route('pengumuman.index') }}"
+                    class="block rounded-md py-2 text-xs {{ request()->routeIs('pengumuman.*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Pengumuman</a>
             </div>
         </div>
     </nav>
