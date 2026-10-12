@@ -6,12 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
 
-    <title>@yield('title', 'SIAKAD') — Ilyas Institute</title>
+    <title>@yield('title', 'SIAKAD') — ILYAS INSTITUT</title>
+
+    <!-- Tailwind CSS CDN (Wajib ditambahkan agar desain modern split-screen aktif) -->
+    <script src="https://cdn.tailwindcss.com"></script>
 
     <link rel="stylesheet" href="{{ asset('css/siakad.css') }}">
 </head>
 
-<body>
+<body class="bg-slate-100 min-h-screen flex flex-col">
     <a href="#konten-utama" class="skip-link">
         Lewati navigasi
     </a>
@@ -19,7 +22,7 @@
     <header class="topbar">
         <div class="topbar-inner">
             <a href="{{ route('home') }}">
-                <small>ILYAS INSTITUTE</small>
+                <small>ILYAS INSTITUT</small>
             </a>
 
             <div class="account">
@@ -40,11 +43,10 @@
         </div>
     </header>
 
-    <main id="konten-utama" class="container">
+    <main id="konten-utama" class="container flex-1">
         @auth('web')
             @include('partials.navbar-portal')
         @endauth
-
 
         @if (session('success'))
             <div class="alert alert-success" role="status">

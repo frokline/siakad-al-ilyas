@@ -4,14 +4,14 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>@yield('title', 'Pembayaran') — Ilyas Institute</title>
+    <title>@yield('title', 'Pembayaran') — ILYAS INSTITUT</title>
     <link rel="stylesheet" href="{{ asset('css/materi.css') }}">
 </head>
 
 <body>
     <header class="topbar">
         <a class="brand" href="{{ route('pembayaran.index') }}">
-            ILYAS INSTITUTE
+            ILYAS INSTITUT
             <small>Pembayaran SPP</small>
         </a>
 

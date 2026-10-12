@@ -4,12 +4,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>@yield('title', 'Tagihan') — Ilyas Institute</title>
+    <title>@yield('title', 'Tagihan') — ILYAS INSTITUT</title>
     <link rel="stylesheet" href="{{ asset('css/materi.css') }}">
 </head>
 
 <body>
-    <header class="topbar"><a class="brand" href="{{ route('tagihan.index') }}">ILYAS INSTITUTE <small>Tagihan
+    <header class="topbar"><a class="brand" href="{{ route('tagihan.index') }}">ILYAS INSTITUT <small>Tagihan
                 Bulanan</small></a>
         <nav><a href="{{ route('tagihan.index') }}">Tagihan</a>
             @can('akses-jenis-biaya')

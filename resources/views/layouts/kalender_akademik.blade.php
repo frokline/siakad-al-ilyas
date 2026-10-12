@@ -10,7 +10,7 @@
 </head>
 
 <body><a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('kalender.index') }}">ILYAS INSTITUTE <small>Kalender
+    <header class="topbar"><a class="brand" href="{{ route('kalender.index') }}">ILYAS INSTITUT <small>Kalender
                 Akademik</small></a>
         <nav aria-label="Menu utama"><a href="{{ route('kalender.index') }}">Kalender</a>
             @can('akses-surat')
@@ -39,7 +39,7 @@
         @endif
         @yield('content')
     </main>
-    <footer class="container muted">Waktu kalender: WITA (UTC+8) · Ilyas Institute</footer>
+    <footer class="container muted">Waktu kalender: WITA (UTC+8) · ILYAS INSTITUT</footer>
 </body>
 
 </html>

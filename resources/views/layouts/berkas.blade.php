@@ -11,32 +11,32 @@
 <body>
     <a class="skip" href="#konten">Langsung ke isi</a>
     <header class="topbar">
-        <a class="brand" href="{{ route('home') }}">ILYAS INSTITUTE <span>Portal akademik</span></a>
+        <a class="brand" href="{{ route('home') }}">ILYAS INSTITUT <span>Portal akademik</span></a>
         <nav aria-label="Navigasi berkas">
             @auth('web')
-@if (Route::has('portal.mahasiswa.index'))
-    <a href="{{ route('portal.mahasiswa.index') }}">
-        Beranda
-    </a>
-@endif
+                @if (Route::has('portal.mahasiswa.index'))
+                    <a href="{{ route('portal.mahasiswa.index') }}">
+                        Beranda
+                    </a>
+                @endif
 
-@if (auth('web')->user()->hasRole(\App\Models\Role::MAHASISWA))
-    <a href="{{ route('portal.profil.show') }}">
-        Profil Saya
-    </a>
+                @if (auth('web')->user()->hasRole(\App\Models\Role::MAHASISWA))
+                    <a href="{{ route('portal.profil.show') }}">
+                        Profil Saya
+                    </a>
 
-    <a href="{{ route('portal.krs.index') }}">
-        KRS Saya
-    </a>
+                    <a href="{{ route('portal.krs.index') }}">
+                        KRS Saya
+                    </a>
 
-    <a href="{{ route('portal.jadwal.index') }}">
-        Jadwal Saya
-    </a>
+                    <a href="{{ route('portal.jadwal.index') }}">
+                        Jadwal Saya
+                    </a>
 
-    <a href="{{ route('portal.presensi.index') }}">
-        Riwayat Presensi
-    </a>
-@endif
+                    <a href="{{ route('portal.presensi.index') }}">
+                        Riwayat Presensi
+                    </a>
+                @endif
                 @can('akses-presensi')
                     <a href="{{ route('presensi.index') }}">Presensi</a>
                 @endcan
@@ -78,7 +78,7 @@
         @endif
         @yield('content')
     </main>
-    <footer class="container muted">SIAKAD Ilyas Institute</footer>
+    <footer class="container muted">SIAKAD ILYAS INSTITUT</footer>
 </body>
 
 </html>

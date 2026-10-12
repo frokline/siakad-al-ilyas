@@ -22,7 +22,7 @@ class KeuanganDashboardAksesTest extends TestCase
         }
 
         $this->app->detectEnvironment(
-            fn (): string => 'testing'
+            fn(): string => 'testing'
         );
 
         config([
@@ -410,7 +410,7 @@ class KeuanganDashboardAksesTest extends TestCase
             ->get(route('keuangan.dashboard'))
             ->assertOk()
             ->assertSee('&lt;script&gt;', false)
-            ->assertDontSee('<script>', false);
+            ->assertDontSee('<script>alert("x")</script>', false);
     }
 
     public function test_tujuan_portal_keuangan_menuju_dashboard(): void

@@ -10,7 +10,7 @@
 </head>
 
 <body><a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('pengumuman.index') }}">ILYAS INSTITUTE
+    <header class="topbar"><a class="brand" href="{{ route('pengumuman.index') }}">ILYAS INSTITUT
             <small>Pengumuman</small></a>
         <nav aria-label="Menu utama"><a href="{{ route('pengumuman.index') }}">Untuk saya</a>
             @can('create', \App\Models\Pengumuman::class)

@@ -20,7 +20,7 @@
 
     <main class="krs-print-sheet">
         <header class="krs-print-header">
-            <p class="krs-print-institusi">ILYAS INSTITUTE</p>
+            <p class="krs-print-institusi">ILYAS INSTITUT</p>
             <h1>KARTU RENCANA STUDI</h1>
             <p>Periode {{ $registrasi->periodeAkademik->kode }}</p>
         </header>
@@ -71,7 +71,7 @@
         <footer class="krs-print-footer">
             <p>Dicetak {{ $dicetakPada->timezone(config('siakad.timezone', 'Asia/Makassar'))->format('d-m-Y H:i:s') }}
                 · {{ config('siakad.timezone', 'Asia/Makassar') }}</p>
-            <p>Salinan KRS versi {{ $krs->versi }}. Status dan versi terbaru tersedia pada SIAKAD Ilyas Institute.
+            <p>Salinan KRS versi {{ $krs->versi }}. Status dan versi terbaru tersedia pada SIAKAD ILYAS INSTITUT.
             </p>
         </footer>
     </main>

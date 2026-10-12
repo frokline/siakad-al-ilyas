@@ -36,7 +36,7 @@
             <div class="flex flex-col md:flex-row items-center justify-between py-4 gap-4">
                 <!-- Brand -->
                 <a href="{{ route('kegiatan.kelas') }}" class="flex flex-col">
-                    <span class="text-base font-black tracking-wider text-white">ILYAS INSTITUTE</span>
+                    <span class="text-base font-black tracking-wider text-white">ILYAS INSTITUT</span>
                     <span class="text-[10px] text-emerald-200 uppercase tracking-widest font-medium">Portal Kegiatan
                         Kuliah</span>
                 </a>
@@ -73,7 +73,7 @@
 
     <!-- FOOTER -->
     <footer class="mt-auto bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
-        SIAKAD Ilyas Institute &middot; Portal Dosen & Kegiatan Kuliah
+        SIAKAD ILYAS INSTITUT &middot; Portal Dosen & Kegiatan Kuliah
     </footer>
 </body>
 

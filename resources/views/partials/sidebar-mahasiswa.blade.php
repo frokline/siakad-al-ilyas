@@ -65,7 +65,7 @@
     class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-siakad-dark text-white transition-transform duration-300 lg:static lg:translate-x-0 shadow-2xl">
     <div class="flex h-16 shrink-0 items-center px-6 gap-3">
         @if (is_file(public_path($logoKampus)))
-            <img src="{{ asset($logoKampus) }}" alt="Logo Ilyas Institute"
+            <img src="{{ asset($logoKampus) }}" alt="Logo ILYAS INSTITUT"
                 class="h-10 w-10 shrink-0 rounded-lg bg-white object-cover shadow-sm ring-1 ring-white/20">
         @else
             <div
@@ -103,8 +103,9 @@
     <div class="p-4 border-t border-white/10 bg-siakad-dark">
         <div class="flex items-center gap-3 mb-4">
             <div
-                class="h-10 w-10 shrink-0 rounded-full bg-slate-300 overflow-hidden border border-emerald-500 flex items-center justify-center text-siakad-dark font-bold">
-                {{ strtoupper(substr(auth()->user()->nama ?? 'M', 0, 1)) }}
+                class="h-10 w-10 shrink-0 rounded-full bg-slate-300 overflow-hidden border border-emerald-500 flex items-center justify-center">
+                <img src="{{ route('portal.profil.foto') }}" alt="Foto profil {{ auth()->user()->nama ?? 'Mahasiswa' }}"
+                    class="h-full w-full object-cover">
             </div>
             <div class="overflow-hidden">
                 <p class="truncate text-sm font-semibold text-white">{{ auth()->user()->nama ?? 'Mahasiswa' }}</p>

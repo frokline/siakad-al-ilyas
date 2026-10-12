@@ -6,14 +6,14 @@ Layout portal dosen berdiri sendiri agar navigasinya tidak bergantung pada izin 
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>@yield('title', 'Presensi') — Ilyas Institute</title>
+    <title>@yield('title', 'Presensi') — ILYAS INSTITUT</title>
     <link rel="stylesheet" href="{{ asset('css/presensi.css') }}">
 </head>
 
 <body>
     <a class="skip-link" href="#konten">Lewati ke isi halaman</a>
     <header class="topbar">
-        <a class="brand" href="{{ route('presensi.index') }}">ILYAS INSTITUTE <span>Presensi perkuliahan</span></a>
+        <a class="brand" href="{{ route('presensi.index') }}">ILYAS INSTITUT <span>Presensi perkuliahan</span></a>
         <nav aria-label="Navigasi presensi">
             @auth('web')
                 @can('akses-presensi')
@@ -46,7 +46,7 @@ Layout portal dosen berdiri sendiri agar navigasinya tidak bergantung pada izin 
         @endif
         @yield('content')
     </main>
-    <footer class="container muted">SIAKAD Ilyas Institute · Presensi dicatat oleh pengajar.</footer>
+    <footer class="container muted">SIAKAD ILYAS INSTITUT · Presensi dicatat oleh pengajar.</footer>
 </body>
 
 </html>

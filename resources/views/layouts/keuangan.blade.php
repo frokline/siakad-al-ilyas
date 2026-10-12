@@ -1,62 +1,83 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id" class="h-full bg-[#F3F4F6]">
 
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>@yield('title', 'Jenis Biaya') — SIAKAD Ilyas</title>
-    <link rel="stylesheet" href="{{ asset('css/materi.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>@yield('title', 'Keuangan') — ILYAS INSTITUT</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    {{-- Plugin collapse harus dimuat sebelum Alpine inti. --}}
+    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        siakad: {
+                            dark: '#065F46',
+                            active: '#047857',
+                            accent: '#F59E0B',
+                            bg: '#F3F4F6'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        [x-cloak] {
+            display: none !important;
+        }
+    </style>
 </head>
 
-<body>
-    <a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('keuangan.dashboard') }}">ILYAS INSTITUTE <small>Jenis
-                Biaya</small></a>
-        <nav aria-label="Menu utama">
-<a
-    href="{{ route('keuangan.dashboard') }}"
-    @if (request()->routeIs('keuangan.dashboard'))
-        aria-current="page"
-    @endif
->
-    Dashboard
-</a>
-            <a href="{{ route('keuangan.jenis-biaya.index') }}">Jenis biaya</a>
-            @can('akses-berkas')
-                <a href="{{ route('berkas.index') }}">Berkas saya</a>
-            @endcan
-            @can('akses-kegiatan')
-                <a href="{{ route('kegiatan.index') }}">Kegiatan</a>
-            @endcan
-            <span>{{ auth('web')->user()->nama }}</span>
-            <form method="post" action="{{ route('berkas.logout') }}">@csrf<button class="secondary"
-                    type="submit">Keluar</button></form>
+<body class="h-full font-sans text-slate-800 antialiased" x-data="{ sidebarOpen: false }">
+    <a class="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-white focus:p-4" href="#konten">Langsung ke
+        isi</a>
 
-            @can('akses-tagihan')
-                <a href="{{ route('tagihan.index') }}">Tagihan SPP</a>
-            @endcan
+    <div class="flex h-screen overflow-hidden">
 
-            @can('akses-pembayaran')
-                <a href="{{ route('pembayaran.index') }}">Pembayaran SPP</a>
-            @endcan
-        </nav>
-    </header>
-    <main id="konten" class="container">
-        @if (session('info'))
-            <div class="notice" role="status">{{ session('info') }}</div>
-        @endif
-        @if ($errors->any())
-            <div class="notice error" role="alert"><strong>Permintaan belum berhasil.</strong>
-                <ul>
-                    @foreach ($errors->all() as $pesan)
-                        <li>{{ $pesan }}</li>
-                    @endforeach
-                </ul>
-            </div>
-        @endif
-        @yield('content')
-    </main>
-    <footer class="container muted">SIAKAD Ilyas Institute · Katalog jenis biaya akademik.</footer>
+        <!-- Latar gelap saat sidebar di HP terbuka -->
+        <div x-show="sidebarOpen" @click="sidebarOpen = false" x-cloak
+            class="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden"></div>
+
+        @include('partials.sidebar-keuangan')
+
+        <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+
+            @include('partials.header-admin')
+
+            <main id="konten" class="relative flex-1 overflow-y-auto bg-siakad-bg p-4 sm:p-6">
+                @foreach (['success' => 'bg-emerald-50 border-emerald-200 text-emerald-800', 'info' => 'bg-emerald-50 border-emerald-200 text-emerald-800', 'warning' => 'bg-amber-50 border-amber-200 text-amber-800', 'error' => 'bg-rose-50 border-rose-200 text-rose-700'] as $kunci => $warna)
+                    @if (is_string(session($kunci)) && session($kunci) !== '')
+                        <div class="mb-6 rounded-lg border p-4 text-sm {{ $warna }}"
+                            role="{{ $kunci === 'error' ? 'alert' : 'status' }}">
+                            {{ session($kunci) }}
+                        </div>
+                    @endif
+                @endforeach
+
+                @if ($errors->any())
+                    <div class="mb-6 rounded-lg bg-rose-50 border border-rose-200 p-4 text-sm text-rose-700"
+                        role="alert">
+                        <strong class="font-bold">Permintaan belum berhasil.</strong>
+                        <ul class="list-disc list-inside mt-2">
+                            @foreach ($errors->all() as $pesan)
+                                <li>{{ $pesan }}</li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endif
+
+                @yield('content')
+            </main>
+
+        </div>
+    </div>
+    @stack('scripts')
 </body>
 
 </html>

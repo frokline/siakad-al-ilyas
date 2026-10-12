@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
 
-    <title>@yield('title', 'SIAKAD') — Ilyas Institute</title>
+    <title>@yield('title', 'SIAKAD') — ILYAS INSTITUT</title>
 
     <link rel="stylesheet" href="{{ asset('css/siakad.css') }}">
 </head>
@@ -19,7 +19,7 @@
     <header class="topbar">
         <div class="topbar-inner">
             <a href="{{ auth('web')->check() ? route('admin.roles.index') : route('login') }}">
-                <small>ILYAS INSTITUTE</small>
+                <small>ILYAS INSTITUT</small>
             </a>
 
             <div class="account">

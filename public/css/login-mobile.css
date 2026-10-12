@@ -1,0 +1,274 @@
+/* =========================================================
+   LOGIN SIAKAD ILYAS INSTITUT — MOBILE ONLY
+   Simpan sebagai: public/css/login-mobile.css
+   Muat SETELAH login.css di template Blade.
+   Tidak mengubah tampilan desktop (viewport > 760px).
+   ========================================================= */
+
+@media (max-width: 760px) {
+    body.login-page {
+        display: block !important;
+        width: 100%;
+        min-width: 320px;
+        min-height: 100vh;
+        min-height: 100svh;
+        padding: 12px;
+        overflow-x: hidden;
+        background-size: 76px 76px;
+    }
+
+    body.login-page .login-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) !important;
+        grid-template-rows: auto auto;
+        width: min(440px, 100%);
+        height: auto !important;
+        min-width: 0;
+        min-height: 0;
+        margin: 0 auto;
+        overflow: hidden;
+        border-radius: 14px;
+    }
+
+    /* Foto dijadikan banner pendek di atas formulir,
+       bukan kolom sempit di sampingnya. */
+    body.login-page .login-visual {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: flex-end;
+        width: 100%;
+        height: 132px;
+        min-width: 0;
+        min-height: 132px;
+    }
+
+    body.login-page .login-visual-image {
+        object-position: center 43%;
+    }
+
+    body.login-page .login-visual::before {
+        background: linear-gradient(
+            180deg,
+            rgba(4, 34, 24, .06) 0%,
+            rgba(4, 34, 24, .35) 38%,
+            rgba(3, 37, 25, .93) 100%
+        );
+    }
+
+    body.login-page .visual-content {
+        width: 100%;
+        padding: 14px 19px 15px;
+    }
+
+    body.login-page .visual-label {
+        gap: 7px;
+        margin: 0 0 6px;
+        padding: 5px 9px;
+        font-size: 8px;
+        letter-spacing: .1em;
+    }
+
+    body.login-page .visual-label::before {
+        width: 6px;
+        height: 6px;
+    }
+
+    body.login-page .visual-content h1 {
+        max-width: 100%;
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.12;
+        letter-spacing: -.035em;
+    }
+
+    /* Deskripsi panjang disembunyikan hanya di HP agar ruang lebih lega. */
+    body.login-page .visual-description,
+    body.login-page .visual-rule {
+        display: none;
+    }
+
+    body.login-page .login-panel {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        width: 100%;
+        min-width: 0;
+        padding: 20px 22px 17px;
+    }
+
+    body.login-page .login-brand {
+        justify-content: center;
+        margin: 0 0 6px;
+    }
+
+    body.login-page .login-logo {
+        width: 62px;
+        height: 62px;
+        max-width: 100%;
+    }
+
+    body.login-page .login-heading {
+        margin: 0 0 13px;
+        text-align: center;
+    }
+
+    body.login-page .login-eyebrow {
+        margin: 0 0 5px;
+        font-size: 8.5px;
+        line-height: 1.4;
+        letter-spacing: .12em;
+    }
+
+    body.login-page .login-heading h2 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.2;
+        letter-spacing: -.03em;
+    }
+
+    body.login-page .login-heading > p:last-child {
+        max-width: 290px;
+        margin: 6px auto 0;
+        font-size: 11px;
+        line-height: 1.5;
+    }
+
+    body.login-page .login-alert {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        font-size: 10px;
+    }
+
+    body.login-page .login-form {
+        display: grid;
+        gap: 10px;
+        width: 100%;
+        min-width: 0;
+    }
+
+    body.login-page .login-field {
+        min-width: 0;
+    }
+
+    body.login-page .login-field label {
+        margin-bottom: 5px;
+        font-size: 11px;
+        line-height: 1.35;
+    }
+
+    body.login-page .login-input {
+        width: 100%;
+        height: 42px;
+        padding-left: 40px;
+        border-radius: 8px;
+        font-size: 12px;
+    }
+
+    body.login-page .login-input-password {
+        padding-right: 43px;
+    }
+
+    body.login-page .login-input-icon {
+        left: 12px;
+        width: 16px;
+        height: 16px;
+    }
+
+    body.login-page .password-toggle {
+        right: 5px;
+        width: 31px;
+        height: 31px;
+    }
+
+    body.login-page .login-options {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        min-width: 0;
+        margin: 0;
+    }
+
+    body.login-page .login-check {
+        align-items: center;
+        gap: 7px;
+        font-size: 10px;
+        line-height: 1.4;
+    }
+
+    body.login-page .login-check input {
+        width: 15px;
+        height: 15px;
+    }
+
+    body.login-page .login-submit {
+        width: 100%;
+        min-height: 43px;
+        margin-top: 0;
+        padding: 10px 13px;
+        border-radius: 8px;
+        font-size: 12px;
+    }
+
+    body.login-page .login-submit svg {
+        width: 15px;
+        height: 15px;
+    }
+
+    body.login-page .login-error {
+        font-size: 10px;
+        overflow-wrap: anywhere;
+    }
+
+    body.login-page .login-help {
+        margin: 10px 0 0;
+        font-size: 9px;
+        line-height: 1.5;
+    }
+
+    body.login-page .login-footer {
+        margin: 11px 0 0;
+        padding: 8px 0 0;
+        font-size: 8px;
+        line-height: 1.45;
+    }
+}
+
+/* Ponsel sangat kecil, misalnya lebar 320–360px. */
+@media (max-width: 360px) {
+    body.login-page {
+        padding: 8px;
+        background-size: 64px 64px;
+    }
+
+    body.login-page .login-shell {
+        width: 100%;
+        border-radius: 11px;
+    }
+
+    body.login-page .login-visual {
+        height: 124px;
+        min-height: 124px;
+    }
+
+    body.login-page .visual-content {
+        padding: 12px 16px 13px;
+    }
+
+    body.login-page .visual-content h1 {
+        font-size: 21px;
+    }
+
+    body.login-page .login-panel {
+        padding: 18px 17px 15px;
+    }
+
+    body.login-page .login-logo {
+        width: 58px;
+        height: 58px;
+    }
+
+    body.login-page .login-heading h2 {
+        font-size: 21px;
+    }
+}

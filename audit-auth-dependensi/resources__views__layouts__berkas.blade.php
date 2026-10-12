@@ -11,7 +11,7 @@
 <body>
     <a class="skip" href="#konten">Langsung ke isi</a>
     <header class="topbar">
-        <a class="brand" href="{{ route('berkas.index') }}">ILYAS INSTITUTE <span>Berkas akademik</span></a>
+        <a class="brand" href="{{ route('berkas.index') }}">ILYAS INSTITUT <span>Berkas akademik</span></a>
         <nav aria-label="Navigasi berkas">
             @auth('web')
                 @can('akses-berkas')
@@ -70,7 +70,7 @@
         @endif
         @yield('content')
     </main>
-    <footer class="container muted">SIAKAD Ilyas Institute</footer>
+    <footer class="container muted">SIAKAD ILYAS INSTITUT</footer>
 </body>
 
 </html>

@@ -24,9 +24,12 @@
         besar: false,
         pilih(e) {
             const f = e.target.files[0];
-            if (!f) { this.nama = '';
+            if (!f) {
+                this.nama = '';
                 this.ukuran = '';
-                this.besar = false; return; }
+                this.besar = false;
+                return;
+            }
             this.nama = f.name;
             this.besar = f.size > 20 * 1024 * 1024;
             this.ukuran = f.size >= 1048576 ?
@@ -57,9 +60,9 @@
                 :class="besar ? 'border-rose-300 bg-rose-50' :
                     (nama ? 'border-siakad-active bg-emerald-50/60' :
                         'border-slate-300 bg-slate-50 hover:border-siakad-active hover:bg-emerald-50/40')">
-                <input id="file" name="file" type="file" required accept=".pdf,.jpg,.jpeg,.png"
-                    aria-describedby="batas-file" @change="pilih($event)"
-                    class="absolute inset-0 h-full w-full cursor-pointer opacity-0">
+                <input id="file" name="file" type="file" required
+                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" aria-describedby="batas-file"
+                    @change="pilih($event)" class="absolute inset-0 h-full w-full cursor-pointer opacity-0">
 
                 <div x-show="!nama" class="pointer-events-none">
                     <span
@@ -71,7 +74,10 @@
                     </span>
                     <p class="mt-4 text-sm font-semibold text-slate-700">Klik untuk memilih berkas, atau seret ke sini
                     </p>
-                    <p class="mt-1 text-xs text-slate-500">PDF, JPG, atau PNG &middot; maksimal 20 MB</p>
+                    <p class="mt-1 text-xs text-slate-500">
+                        PDF, JPG, PNG, DOC, DOCX, XLS, XLSX, PPT, PPTX, atau ZIP
+                        &middot; maksimal 20 MiB
+                    </p>
                 </div>
 
                 <div x-show="nama" x-cloak class="pointer-events-none">
@@ -84,8 +90,10 @@
                     </span>
                     <p class="mt-4 break-all text-sm font-semibold text-slate-800" x-text="nama"></p>
                     <p class="mt-1 text-xs" :class="besar ? 'font-semibold text-rose-600' : 'text-slate-500'"
-                        x-text="besar ? ukuran + ' — melebihi batas 20 MB' : ukuran + ' · klik untuk mengganti berkas'">
-                    </p>
+                        x-text="besar
+                            ? ukuran + ' — melebihi batas 20 MiB'
+                            : ukuran + ' · klik untuk mengganti berkas'"
+                        </p>
                 </div>
             </div>
             @error('file')

@@ -181,7 +181,7 @@
 
     <div class="cetak-container">
         <header class="header">
-            <h1>ILYAS INSTITUTE</h1>
+            <h1>ILYAS INSTITUT</h1>
             <h2>KARTU RENCANA STUDI (KRS)</h2>
             <p>Periode Akademik {{ $registrasi->periodeAkademik->kode }}</p>
         </header>

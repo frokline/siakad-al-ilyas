@@ -54,6 +54,7 @@ use App\Http\Controllers\RoleController;
 use App\Http\Controllers\RombelController;
 use App\Http\Controllers\TagihanController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\PortalFotoProfilMahasiswaController;
 
 /*
 |--------------------------------------------------------------------------
@@ -139,6 +140,16 @@ Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private']
                 Route::get('/edit', 'edit')->name('edit');
                 Route::patch('/', 'update')->name('update');
             });
+        Route::get(
+            '/profil-saya/foto',
+            [PortalFotoProfilMahasiswaController::class, 'show']
+        )->name('portal.profil.foto');
+
+        Route::post(
+            '/profil-saya/foto',
+            [PortalFotoProfilMahasiswaController::class, 'update']
+        )->middleware('throttle:10,1')
+            ->name('portal.profil.foto.update');
 
         // Kelas & peserta kelas milik dosen
         Route::prefix('dosen/kelas-saya')
@@ -787,4 +798,48 @@ Route::prefix('notifikasi')->name('notifikasi.')
             Route::post('/{notifikasi}/baca', 'baca')->name('baca');
             Route::post('/{notifikasi}/buka', 'buka')->name('buka');
         });
+    });
+
+// Materi Perkuliahan
+Route::prefix('materi')->name('materi.')
+    ->middleware([
+        AuthenticateMateri::class . ':web',
+        'auth.session',
+        'cache.headers:no_store;private',
+        'can:akses-materi',
+    ])
+    ->controller(MateriController::class)
+    ->where(['materi' => '[0-9]+'])
+    ->group(function (): void {
+        Route::get('/', 'index')->name('index');
+        Route::get('/create', 'create')->name('create');
+        Route::post('/', 'store')->middleware('throttle:30,1')->name('store');
+        Route::get('/{materi}', 'show')->name('show');
+        Route::get('/{materi}/edit', 'edit')->name('edit');
+        Route::patch('/{materi}', 'update')->middleware('throttle:30,1')->name('update');
+        Route::get('/kelas', 'kelas')->name('kelas');
+
+        Route::post('/{materi}/berkas/{lampiran}/tautan', 'tautan')
+            ->middleware('throttle:30,1')
+            ->name('tautan');
+
+        Route::get('/{materi}/berkas/{lampiran}', 'unduh')
+            ->middleware(['signed', 'throttle:30,1'])
+            ->name('unduh');
+
+        Route::post('/{materi}/terbitkan', 'terbitkan')
+            ->middleware('throttle:30,1')
+            ->name('terbitkan');
+
+        Route::post('/{materi}/tarik', 'tarik')
+            ->middleware('throttle:30,1')
+            ->name('tarik');
+
+        Route::post('/{materi}/arsipkan', 'arsipkan')
+            ->middleware('throttle:30,1')
+            ->name('arsipkan');
+
+        Route::post('/{materi}/pulihkan', 'pulihkan')
+            ->middleware('throttle:30,1')
+            ->name('pulihkan');
     });

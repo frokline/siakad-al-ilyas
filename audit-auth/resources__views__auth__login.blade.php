@@ -13,7 +13,7 @@
                 <h1>Masuk Admin</h1>
 
                 <p class="subtitle">
-                    Gunakan akun Admin Akademik Ilyas Institute.
+                    Gunakan akun Admin Akademik ILYAS INSTITUT.
                 </p>
             </div>
         </div>
@@ -25,22 +25,12 @@
                 <div class="field">
                     <label for="login">Username atau email</label>
 
-                    <input
-                        type="text"
-                        id="login"
-                        name="login"
-                        value="{{ old('login') }}"
-                        maxlength="190"
-                        autocomplete="username"
-                        autocapitalize="none"
-                        spellcheck="false"
-                        required
-                        autofocus
+                    <input type="text" id="login" name="login" value="{{ old('login') }}" maxlength="190"
+                        autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus
                         @error('login')
                             aria-invalid="true"
                             aria-describedby="login-error"
-                        @enderror
-                    >
+                        @enderror>
 
                     @error('login')
                         <p id="login-error" class="error">
@@ -52,18 +42,12 @@
                 <div class="field">
                     <label for="password">Kata sandi</label>
 
-                    <input
-                        type="password"
-                        id="password"
-                        name="password"
-                        maxlength="72"
-                        autocomplete="current-password"
+                    <input type="password" id="password" name="password" maxlength="72" autocomplete="current-password"
                         required
                         @error('password')
                             aria-invalid="true"
                             aria-describedby="password-error"
-                        @enderror
-                    >
+                        @enderror>
 
                     @error('password')
                         <p id="password-error" class="error">
@@ -74,13 +58,7 @@
 
                 <div class="field">
                     <label class="checkbox-label" for="remember">
-                        <input
-                            type="checkbox"
-                            id="remember"
-                            name="remember"
-                            value="1"
-                            @checked(old('remember'))
-                        >
+                        <input type="checkbox" id="remember" name="remember" value="1" @checked(old('remember'))>
 
                         <span>Ingat saya di perangkat ini</span>
                     </label>

@@ -6,7 +6,7 @@
             $logoKampus = 'images/logo-ilyas-institut.png';
         @endphp
         @if (is_file(public_path($logoKampus)))
-            <img src="{{ asset($logoKampus) }}" alt="Logo Ilyas Institute"
+            <img src="{{ asset($logoKampus) }}" alt="Logo ILYAS INSTITUT"
                 class="h-10 w-10 shrink-0 rounded-lg bg-white object-cover shadow-sm ring-1 ring-white/20">
         @else
             <div
@@ -20,7 +20,7 @@
         @endif
         <div>
             <h1 class="text-sm font-bold tracking-wide text-white leading-tight">SIAKAD</h1>
-            <p class="text-[10px] text-emerald-200">ILYAS INSTITUTE</p>
+            <p class="text-[10px] text-emerald-200">ILYAS INSTITUT</p>
         </div>
     </div>
 
@@ -62,7 +62,7 @@
         </div>
 
         <!-- Master Akademik Dropdown -->
-        <div x-data="{ open: {{ request()->routeIs('admin.program-studi*', 'admin.periode-akademik*', 'admin.kurikulum*', 'admin.mata-kuliah*', 'admin.mahasiswa*', 'admin.dosen*') ? 'true' : 'false' }} }">
+        <div x-data="{ open: {{ request()->routeIs('admin.program-studi*', 'admin.periode-akademik*', 'admin.kurikulum*', 'admin.mata-kuliah*', 'admin.mahasiswa*', 'admin.dosen*', 'admin.riwayat-studi*', 'admin.registrasi-semester*') ? 'true' : 'false' }} }">
             <button @click="open = !open"
                 class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-emerald-100 transition-colors hover:bg-white/10 hover:text-white">
                 <div class="flex items-center gap-3">
@@ -96,6 +96,22 @@
                 <a href="{{ route('admin.dosen.index') }}"
                     class="block rounded-md py-2 text-xs {{ request()->routeIs('admin.dosen*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Biodata
                     Dosen</a>
+
+                @can('kelola-riwayat-studi')
+                    @if (Route::has('admin.riwayat-studi.index'))
+                        <a href="{{ route('admin.riwayat-studi.index') }}"
+                            class="block rounded-md py-2 text-xs {{ request()->routeIs('admin.riwayat-studi*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Riwayat
+                            Studi</a>
+                    @endif
+                @endcan
+
+                @can('kelola-registrasi-semester')
+                    @if (Route::has('admin.registrasi-semester.index'))
+                        <a href="{{ route('admin.registrasi-semester.index') }}"
+                            class="block rounded-md py-2 text-xs {{ request()->routeIs('admin.registrasi-semester*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Registrasi
+                            Semester</a>
+                    @endif
+                @endcan
             </div>
         </div>
 
@@ -111,8 +127,8 @@
                     </svg>
                     <span class="text-sm">Perkuliahan</span>
                 </div>
-                <svg class="h-4 w-4 transition-transform duration-200" :class="open ? 'rotate-180' : ''" fill="none"
-                    viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <svg class="h-4 w-4 transition-transform duration-200" :class="open ? 'rotate-180' : ''"
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
             </button>
@@ -139,7 +155,7 @@
         </div>
 
         <!-- Pemantauan Dropdown -->
-        <div x-data="{ open: {{ request()->routeIs('admin.pertemuan*') || request()->routeIs('presensi.*') || request()->routeIs('kalender.*') ? 'true' : 'false' }} }">
+        <div x-data="{ open: {{ request()->routeIs('admin.pertemuan*', 'presensi.*', 'kalender.*', 'pengumuman.*') ? 'true' : 'false' }} }">
             <button @click="open = !open"
                 class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-emerald-100 transition-colors hover:bg-white/10 hover:text-white">
                 <div class="flex items-center gap-3">
@@ -160,8 +176,8 @@
                     class="block rounded-md py-2 text-xs {{ request()->routeIs('admin.pertemuan*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Sesi
                     Pertemuan</a>
                 <a href="{{ route('presensi.index') }}"
-                    class="block rounded-md py-2 text-xs {{ request()->routeIs('presensi.*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Rekap
-                    Presensi</a>
+                    class="block rounded-md py-2 text-xs {{ request()->routeIs('presensi.*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Presensi
+                    Kelas</a>
                 <a href="{{ route('kalender.index') }}"
                     class="block rounded-md py-2 text-xs {{ request()->routeIs('kalender.*') ? 'text-siakad-accent font-semibold' : 'text-emerald-200 hover:text-white' }}">Kalender
                     Akademik</a>

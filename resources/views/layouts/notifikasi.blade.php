@@ -9,7 +9,7 @@
 </head>
 
 <body><a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('notifikasi.index') }}">ILYAS INSTITUTE
+    <header class="topbar"><a class="brand" href="{{ route('notifikasi.index') }}">ILYAS INSTITUT
             <small>Notifikasi</small></a>
         @include('partials.navbar-portal')
     </header>

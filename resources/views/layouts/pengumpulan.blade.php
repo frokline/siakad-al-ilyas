@@ -11,7 +11,7 @@
 
 <body>
     <a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('pengumpulan.index') }}">ILYAS INSTITUTE <small>Pengumpulan
+    <header class="topbar"><a class="brand" href="{{ route('pengumpulan.index') }}">ILYAS INSTITUT <small>Pengumpulan
                 Jawaban</small></a>
         @include('partials.navbar-portal')
     </header>

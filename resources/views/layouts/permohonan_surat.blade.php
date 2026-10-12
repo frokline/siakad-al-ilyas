@@ -9,7 +9,7 @@
 </head>
 
 <body><a class="skip" href="#konten">Langsung ke isi</a>
-    <header class="topbar"><a class="brand" href="{{ route('surat.index') }}">ILYAS INSTITUTE <small>Surat
+    <header class="topbar"><a class="brand" href="{{ route('surat.index') }}">ILYAS INSTITUT <small>Surat
                 Akademik</small></a>
         <nav aria-label="Menu utama"><a href="{{ route('surat.index') }}">Permohonan surat</a>
             @can('akses-jenis-surat')
@@ -38,7 +38,7 @@
         @endif
         @yield('content')
     </main>
-    <footer class="container muted">Layanan Surat Akademik · Ilyas Institute</footer>
+    <footer class="container muted">Layanan Surat Akademik · ILYAS INSTITUT</footer>
 </body>
 
 </html>
