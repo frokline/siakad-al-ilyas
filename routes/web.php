@@ -327,6 +327,7 @@ Route::prefix('admin')
             ->middleware('can:kelola-mahasiswa')
             ->where(['mahasiswa' => '[0-9]+'])
             ->group(function (): void {
+                Route::get('/export', 'export')->name('export');
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{mahasiswa}', 'show')->name('show');
@@ -374,6 +375,7 @@ Route::prefix('admin')
             ->middleware('can:kelola-registrasi-semester')
             ->where(['registrasiSemester' => '[0-9]+'])
             ->group(function (): void {
+                Route::get('/export', 'export')->name('export');
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
                 Route::get('/{registrasiSemester}', 'show')->name('show');
@@ -406,9 +408,12 @@ Route::prefix('admin')
             ->group(function (): void {
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
+                Route::get('/export', 'export')->name('export');
+
                 Route::get('/{krs}/cetak', 'cetak')->name('cetak');
                 Route::get('/{krs}/edit', 'edit')->name('edit');
                 Route::get('/{krs}', 'show')->name('show');
+
                 Route::middleware('throttle:30,1')->group(function (): void {
                     Route::post('/', 'store')->name('store');
                     Route::patch('/{krs}', 'update')->name('update');
@@ -488,6 +493,7 @@ Route::prefix('presensi')->name('presensi.')
             ->middleware('can:akses-presensi')
             ->where(['pertemuan' => '[0-9]+', 'presensi' => '[0-9]+'])
             ->group(function (): void {
+                Route::get('/export', 'export')->name('export');
                 Route::get('/', 'index')->name('index');
                 Route::get('/{pertemuan}', 'show')->name('show');
                 Route::get('/{pertemuan}/peserta/{presensi}/edit', 'edit')->name('edit');
@@ -677,6 +683,7 @@ Route::prefix('pembayaran')->name('pembayaran.')
     ->group(function (): void {
         Route::get('/', 'index')->name('index');
         Route::get('/tagihan/{tagihan}/create', 'create')->name('create');
+        Route::post('/tagihan/{tagihan}/unggah-bukti', 'unggahBukti')->middleware('throttle:berkas-upload')->name('unggah-bukti');
         Route::get('/{pembayaran}', 'show')->name('show');
         Route::get('/{pembayaran}/bukti', 'tautan')->middleware('throttle:30,1')->name('tautan');
         Route::get('/{pembayaran}/unduh', 'unduh')->middleware(['signed', 'throttle:30,1'])->name('unduh');

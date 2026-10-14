@@ -42,8 +42,8 @@
             @elseif (!$tujuan)
                 <div class="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-800 shadow-sm"
                     role="alert">
-                    <h2 class="text-sm font-bold uppercase tracking-wider">Rekening tujuan belum tersedia</h2>
-                    <p class="mt-2">Rekening tujuan belum dikonfigurasi. Hubungi admin keuangan.</p>
+                    <h2 class="text-sm font-bold uppercase tracking-wider">Pengajuan belum tersedia</h2>
+                    <p class="mt-2">Admin keuangan belum mengaktifkan pengajuan pembayaran. Hubungi admin keuangan.</p>
                 </div>
             @else
                 {{-- Langkah 1: unggah dan cari berkas --}}
@@ -52,27 +52,48 @@
                         <h2 class="text-sm font-bold uppercase tracking-wider text-siakad-dark">Siapkan bukti
                             transfer</h2>
                     </div>
-                    <div class="space-y-4 p-6">
-                        <p class="text-sm text-slate-600">Unggah bukti PDF/JPG/PNG pada
-                            <a href="{{ route('berkas.create') }}" target="_blank" rel="noopener noreferrer"
-                                class="font-semibold text-siakad-active underline">Berkas Saya</a>. Setelah unggahan
-                            berstatus <strong>Tersedia</strong>, muat ulang halaman ini lalu pilih buktinya. Admin yang
-                            mengajukan atas nama mahasiswa memakai unggahan akun admin sendiri.
-                        </p>
-                        <form method="get" action="{{ route('pembayaran.create', $tagihan) }}"
-                            class="flex flex-col gap-2 sm:flex-row sm:items-end">
-                            <div class="flex-1">
-                                <label for="q"
-                                    class="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-600">Cari
-                                    label berkas</label>
-                                <input id="q" name="q" maxlength="100" value="{{ $filter['q'] ?? '' }}"
-                                    placeholder="Ketik label berkas"
-                                    class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none focus:border-siakad-dark focus:ring-2 focus:ring-siakad-dark/20">
+                    <div class="space-y-5 p-6">
+                        <p class="text-sm text-slate-600">Unggah <strong>foto/screenshot bukti transfer</strong>
+                            (JPG/PNG) atau PDF di bawah ini. Setelah tersimpan, bukti otomatis terpilih pada formulir
+                            pengajuan.</p>
+                        <form method="post" action="{{ route('pembayaran.unggah-bukti', $tagihan) }}"
+                            enctype="multipart/form-data" class="space-y-3">
+                            @csrf
+                            <div>
+                                <label for="bukti" class="{{ $label }}">File bukti transfer <span
+                                        class="text-rose-500">*</span></label>
+                                <input id="bukti" name="bukti" type="file"
+                                    accept="image/jpeg,image/png,application/pdf" required
+                                    class="block w-full cursor-pointer rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm file:mr-4 file:rounded-lg file:border-0 file:bg-siakad-dark file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-emerald-800">
+                                @error('bukti')
+                                    <p class="mt-1.5 text-xs text-rose-600">{{ $message }}</p>
+                                @enderror
+                                <p class="mt-1.5 text-xs text-slate-500">Maksimal
+                                    {{ round(config('berkas.maks_kib') / 1024) }} MB. JPG, PNG, atau PDF.</p>
                             </div>
                             <button type="submit"
-                                class="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Cari
-                                / muat ulang berkas</button>
+                                class="rounded-xl bg-siakad-dark px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800">Unggah
+                                bukti</button>
                         </form>
+
+                        <details class="border-t border-slate-100 pt-4">
+                            <summary class="cursor-pointer text-xs font-bold uppercase tracking-wider text-slate-500">
+                                Pakai berkas yang sudah pernah diunggah</summary>
+                            <form method="get" action="{{ route('pembayaran.create', $tagihan) }}"
+                                class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                                <div class="flex-1">
+                                    <label for="q"
+                                        class="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-600">Cari
+                                        label berkas</label>
+                                    <input id="q" name="q" maxlength="100" value="{{ $filter['q'] ?? '' }}"
+                                        placeholder="Ketik label berkas"
+                                        class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none focus:border-siakad-dark focus:ring-2 focus:ring-siakad-dark/20">
+                                </div>
+                                <button type="submit"
+                                    class="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Cari
+                                    / muat ulang berkas</button>
+                            </form>
+                        </details>
                     </div>
                 </section>
 
@@ -104,7 +125,7 @@
                                     <label
                                         class="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-siakad-active hover:bg-emerald-50/40 has-[:checked]:border-siakad-active has-[:checked]:bg-emerald-50">
                                         <input type="radio" name="bukti_berkas_id" value="{{ $b->id }}"
-                                            @checked((string) old('bukti_berkas_id') === (string) $b->id) required
+                                            @checked((string) old('bukti_berkas_id', $terpilih ?? '') === (string) $b->id) required
                                             class="mt-1 h-4 w-4 border-slate-300 text-siakad-active focus:ring-siakad-active">
                                         <span class="min-w-0 flex-1">
                                             <span class="block text-sm font-semibold text-slate-800">#{{ $b->id }}
@@ -175,7 +196,7 @@
                             <label class="flex cursor-pointer items-start gap-2.5 text-sm text-slate-700">
                                 <input type="checkbox" name="konfirmasi" value="1" required
                                     class="mt-0.5 h-4 w-4 rounded border-slate-300 text-siakad-active focus:ring-siakad-active">
-                                Saya telah memeriksa tujuan rekening, nominal, tanggal, dan bukti untuk tagihan ini.
+                                Saya telah memeriksa nominal, tanggal, dan bukti transfer untuk tagihan ini.
                             </label>
                             @error('konfirmasi')
                                 <p class="mt-1.5 text-xs text-rose-600">{{ $message }}</p>
@@ -226,23 +247,23 @@
             </div>
 
             <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 shadow-sm">
-                <h2 class="text-xs font-bold uppercase tracking-wider">Rekening tujuan</h2>
-                <p class="mt-2 break-words text-base font-bold">
-                    {{ $tujuan ?? 'Belum dikonfigurasi. Hubungi admin keuangan.' }}</p>
+                <h2 class="text-xs font-bold uppercase tracking-wider">Instruksi pembayaran</h2>
+                <p class="mt-2 break-words text-base font-semibold">
+                    {{ $tujuan ?? 'Hubungi admin keuangan.' }}</p>
             </div>
 
             <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500">Alur pembayaran</h2>
                 <ol class="mt-4 space-y-3 text-sm text-slate-700">
                     <li class="flex gap-3"><span
-                            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-siakad-dark">1</span>Transfer
-                        ke rekening tujuan</li>
+                            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-siakad-dark">1</span>Lakukan
+                        pembayaran sesuai nominal tagihan</li>
                     <li class="flex gap-3"><span
                             class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-siakad-dark">2</span>Unggah
-                        bukti di Berkas Saya</li>
+                        foto bukti transfer di halaman ini</li>
                     <li class="flex gap-3"><span
-                            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-siakad-dark">3</span>Ajukan
-                        bukti pada halaman ini</li>
+                            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-siakad-dark">3</span>Klik
+                        Ajukan untuk diperiksa</li>
                     <li class="flex gap-3"><span
                             class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-siakad-dark">4</span>Tunggu
                         pemeriksaan Admin Keuangan</li>

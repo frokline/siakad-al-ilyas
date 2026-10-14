@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\MahasiswaExport;
+use Maatwebsite\Excel\Facades\Excel;
 use App\Http\Requests\MahasiswaRequest;
 use App\Models\Mahasiswa;
 use App\Models\Role;
@@ -66,6 +68,25 @@ class MahasiswaController extends Controller
 
         return view('mahasiswa.index', compact('daftar', 'filter'));
     }
+public function export(Request $request)
+{
+    Gate::authorize('kelola-mahasiswa');
+
+    $filter = $request->validate([
+        'q' => ['nullable', 'string', 'max:100'],
+        'status_akun' => [
+            'nullable',
+            Rule::in(['aktif', 'nonaktif']),
+        ],
+    ]);
+
+    $namaFile = 'rekap-mahasiswa-' . now()->format('Ymd-His') . '.xlsx';
+
+    return Excel::download(
+        new MahasiswaExport($filter),
+        $namaFile
+    );
+}
 
     public function create(Request $request): View
     {

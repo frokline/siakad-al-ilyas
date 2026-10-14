@@ -4,19 +4,46 @@
 
 @section('content')
     <!-- PAGE HEADER -->
-    <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-xl font-bold text-slate-800">Kartu Rencana Studi</h1>
-            <p class="text-sm text-slate-500 mt-1">KRS paket semester dan pengesahan oleh admin akademik.</p>
+    <!-- PAGE HEADER -->
+    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="min-w-0">
+            <h1 class="text-xl font-bold text-slate-800">
+                Kartu Rencana Studi
+            </h1>
+            <p class="mt-1 text-sm text-slate-500">
+                KRS paket semester dan pengesahan oleh admin akademik.
+            </p>
         </div>
 
-        <a href="{{ route('admin.krs.create') }}"
-            class="inline-flex items-center gap-2 rounded-lg bg-siakad-dark px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-siakad-dark focus:ring-offset-2 self-start">
-            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            Buat KRS
-        </a>
+        <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <a href="{{ route('admin.krs.export', request()->only(['q', 'periode_id', 'program_studi_id', 'status'])) }}"
+                class="inline-flex w-full items-center justify-center gap-2 rounded-lg
+                    border border-emerald-700 bg-white px-4 py-2.5 text-sm
+                    font-semibold text-emerald-800 transition-colors hover:bg-emerald-50
+                    focus:outline-none focus:ring-2 focus:ring-emerald-700/30
+                    sm:w-auto">
+
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 12-4-4m4 4 4-4M5 20h14" />
+                </svg>
+
+                Ekspor Excel
+            </a>
+
+            <a href="{{ route('admin.krs.create') }}"
+                class="inline-flex w-full items-center justify-center gap-2 rounded-lg
+                    bg-siakad-dark px-4 py-2.5 text-sm font-semibold text-white
+                    shadow-sm transition-colors hover:bg-emerald-800
+                    focus:outline-none focus:ring-2 focus:ring-siakad-dark
+                    focus:ring-offset-2 sm:w-auto">
+
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+
+                Buat KRS
+            </a>
+        </div>
     </div>
 
     <!-- FILTER / SEARCH CARD -->

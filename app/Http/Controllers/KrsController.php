@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\KrsExport;
+use Maatwebsite\Excel\Facades\Excel;
 use App\Actions\KelolaKrs;
 use App\Http\Requests\KrsRequest;
 use App\Models\KelasKuliah;
@@ -56,6 +58,36 @@ class KrsController extends Controller
             'daftarPeriode' => PeriodeAkademik::query()->orderByDesc('mulai')->get(),
             'daftarProdi' => ProgramStudi::query()->orderBy('nama')->get(),
         ]);
+    }
+
+    public function export(Request $request)
+    {
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'periode_id' => [
+                'nullable',
+                'integer',
+                'min:1',
+                Rule::exists('periode_akademik', 'id'),
+            ],
+            'program_studi_id' => [
+                'nullable',
+                'integer',
+                'min:1',
+                Rule::exists('program_studi', 'id'),
+            ],
+            'status' => [
+                'nullable',
+                Rule::in(array_keys(Krs::STATUS)),
+            ],
+        ]);
+
+        $namaFile = 'rekap-krs-' . now()->format('Ymd-His') . '.xlsx';
+
+        return Excel::download(
+            new KrsExport($filter),
+            $namaFile
+        );
     }
 
     public function create(Request $request): View

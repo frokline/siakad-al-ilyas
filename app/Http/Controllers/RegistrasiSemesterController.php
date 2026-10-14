@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\RegistrasiSemesterExport;
+use Maatwebsite\Excel\Facades\Excel;
 use App\Actions\SimpanRegistrasiSemester;
 use App\Http\Requests\RegistrasiSemesterRequest;
 use App\Models\PaketSemester;
@@ -61,6 +63,41 @@ class RegistrasiSemesterController extends Controller
             'prodiPilihan' => ProgramStudi::query()->orderBy('nama')->get(),
             'filter' => $filter,
         ]);
+    }
+
+    public function export(Request $request)
+    {
+        Gate::authorize('kelola-registrasi-semester');
+
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'periode_akademik_id' => [
+                'nullable',
+                'integer',
+                'exists:periode_akademik,id',
+            ],
+            'program_studi_id' => [
+                'nullable',
+                'integer',
+                'exists:program_studi,id',
+            ],
+            'semester_studi' => [
+                'nullable',
+                'integer',
+                'between:1,32767',
+            ],
+            'status' => [
+                'nullable',
+                Rule::in(array_keys(RegistrasiSemester::STATUS)),
+            ],
+        ]);
+
+        $namaFile = 'rekap-registrasi-semester-' . now()->format('Ymd-His') . '.xlsx';
+
+        return Excel::download(
+            new RegistrasiSemesterExport($filter),
+            $namaFile
+        );
     }
 
     public function create(Request $request): View
@@ -225,7 +262,7 @@ class RegistrasiSemesterController extends Controller
 
                 // Penempatan lama tetap dapat dipilih meskipun paket diarsipkan.
                 if ($rombelLamaId !== null) {
-                    $query->orWhereKey($rombelLamaId);
+                    $query->orWhere((new Rombel)->getQualifiedKeyName(), $rombelLamaId);
                 }
             })
             ->orderBy('kode');

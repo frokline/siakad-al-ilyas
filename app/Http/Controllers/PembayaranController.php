@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\KelolaBerkas;
 use App\Actions\KelolaPembayaran;
 use App\Actions\ProsesVerifikasiPembayaran;
 use App\Http\Requests\VerifikasiPembayaranRequest;
@@ -51,7 +52,11 @@ class PembayaranController extends Controller
     public function create(Request $r, Tagihan $tagihan): View
     {
         Gate::authorize('create', [Pembayaran::class, $tagihan]);
-        $f = $r->validate(['q' => ['nullable', 'string', 'max:100'], 'page' => ['nullable', 'integer', 'between:1,100000']]);
+        $f = $r->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'between:1,100000'],
+            'bukti' => ['nullable', 'integer', 'min:1'],
+        ]);
         $q = Berkas::query()->where('diunggah_oleh', $r->user()->id)->where('status', Berkas::TERSEDIA);
         if (! empty($f['q'])) {
             $q->where('label', 'like', '%' . $f['q'] . '%');
@@ -71,8 +76,24 @@ class PembayaranController extends Controller
             'token' => (string) Str::uuid(),
             'aktif' => Pembayaran::query()->where('tagihan_id', $tagihan->id)->whereIn('status', [Pembayaran::MENUNGGU, Pembayaran::DITERIMA])->first(),
             'tujuan' => $tujuan,
-            'versiTujuan' => $versiTujuan
+            'versiTujuan' => $versiTujuan,
+            'terpilih' => isset($f['bukti']) ? (int) $f['bukti'] : null
         ]);
+    }
+    public function unggahBukti(Request $r, Tagihan $tagihan, KelolaBerkas $aksi): RedirectResponse
+    {
+        Gate::authorize('create', [Pembayaran::class, $tagihan]);
+        $r->validate([
+            'bukti' => ['required', 'file', 'min:1', 'max:' . config('berkas.maks_kib'), 'mimes:pdf,jpg,jpeg,png'],
+        ]);
+        $berkas = $aksi->unggah($r->user()->id, $r->file('bukti'), [
+            'upload_token' => (string) Str::uuid(),
+            'label' => 'Bukti transfer ' . $tagihan->nomor,
+            'keterangan' => 'Bukti pembayaran tagihan ' . $tagihan->nomor,
+        ]);
+        return redirect()
+            ->route('pembayaran.create', ['tagihan' => $tagihan, 'bukti' => $berkas->id])
+            ->with('info', 'Bukti tersimpan sebagai #' . $berkas->id . '. Periksa lalu klik "Ajukan untuk diperiksa".');
     }
     public function store(PembayaranRequest $r, Tagihan $tagihan, KelolaPembayaran $aksi): RedirectResponse
     {

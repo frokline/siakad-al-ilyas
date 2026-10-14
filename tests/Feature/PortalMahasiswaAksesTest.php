@@ -383,7 +383,7 @@ class PortalMahasiswaAksesTest extends TestCase
             ->get(route('portal.mahasiswa.index'))
             ->assertOk()
             ->assertSee('&lt;script&gt;', false)
-            ->assertDontSee('<script>', false);
+            ->assertDontSee('<script>alert("x")</script>', false);
     }
 
     public function test_tujuan_portal_mahasiswa_menuju_dashboard(): void

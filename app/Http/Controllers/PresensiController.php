@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\PresensiRekapExport;
+use Maatwebsite\Excel\Facades\Excel;
 use App\Actions\KelolaPertemuan;
 use App\Actions\KelolaPresensi;
 use App\Http\Requests\PresensiRequest;
@@ -39,6 +41,32 @@ class PresensiController extends Controller
         }
         $daftar = $query->orderByDesc('mulai_rencana')->orderByDesc('id')->paginate(20)->withQueryString();
         return view('presensi.index', ['daftar' => $daftar, 'filter' => $filter, 'zona' => $this->zona()]);
+    }
+
+    public function export(Request $request)
+    {
+        Gate::authorize('akses-presensi');
+
+        $filter = $request->validate([
+            'status' => [
+                'nullable',
+                'string',
+                Rule::in(array_keys(Pertemuan::STATUS)),
+            ],
+            'tanggal' => ['nullable', 'date_format:Y-m-d'],
+        ]);
+
+        $namaFile = 'rekap-presensi-' . now()->format('Ymd-His') . '.xlsx';
+
+        return Excel::download(
+            new PresensiRekapExport(
+                $request->user(),
+                $this->akses,
+                $filter,
+                $this->zona()
+            ),
+            $namaFile
+        );
     }
 
     public function show(Request $request, Pertemuan $pertemuan): View

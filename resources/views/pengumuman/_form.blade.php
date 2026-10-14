@@ -180,8 +180,7 @@
 
     <div class="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-5">
         <button type="submit"
-            class="rounded-xl bg-siakad-dark px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-siakad-dark/40">Simpan
-            draf</button>
+            class="rounded-xl bg-siakad-dark px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-siakad-dark/40">Simpan draf</button>
         <a href="{{ $item->exists ? route('pengumuman.show', $item) : route('pengumuman.index', ['mode' => 'kelola']) }}"
             class="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Batal</a>
     </div>

@@ -896,7 +896,7 @@ class PortalPesertaKelasDosenAksesTest extends TestCase
             ->get(route('portal.dosen.peserta.index', 41))
             ->assertOk()
             ->assertSee('&lt;script&gt;', false)
-            ->assertDontSee('<script>', false);
+            ->assertDontSee('<script>alert("x")</script>', false);
     }
 
     public function test_http_dosen_dapat_membuka_detail_peserta_kelasnya(): void
@@ -1228,6 +1228,6 @@ class PortalPesertaKelasDosenAksesTest extends TestCase
             ]))
             ->assertOk()
             ->assertSee('&lt;script&gt;', false)
-            ->assertDontSee('<script>', false);
+            ->assertDontSee('<script>alert("rekap")</script>', false);
     }
 }

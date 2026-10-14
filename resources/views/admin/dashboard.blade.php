@@ -32,7 +32,7 @@
         <!-- Card 2: KRS Menunggu Pengesahan -->
         <div class="rounded-xl bg-white p-5 shadow-sm border border-slate-200 flex flex-col justify-between h-32 relative">
             <div class="flex justify-between items-start">
-                <p class="text-sm font-medium text-slate-600">KRS Diajukan</p>
+                <p class="text-sm font-medium text-slate-600">KRS menunggu pengesahan</p>
                 @if ($ringkasan['krs_diajukan'] > 0)
                     <span class="absolute top-4 right-4 flex h-3 w-3">
                         <span

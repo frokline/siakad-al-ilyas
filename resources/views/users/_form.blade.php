@@ -119,6 +119,21 @@
 
     </div>
 
+    <!-- Ulangi Kata Sandi Pengguna (dibutuhkan aturan "confirmed" pada ManageUserRequest) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="md:col-start-2">
+            <label for="password_confirmation"
+                class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">
+                Ulangi Kata Sandi Pengguna
+                {{ isset($user) && $user->exists ? '(Isi hanya jika mengubah kata sandi)' : '*' }}
+            </label>
+            <input :type="showPassword ? 'text' : 'password'" id="password_confirmation" name="password_confirmation"
+                {{ isset($user) && $user->exists ? '' : 'required' }} maxlength="72" autocomplete="new-password"
+                placeholder="Ketik ulang kata sandi di atas"
+                class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white @error('password') border-rose-500 bg-rose-50/50 @enderror">
+        </div>
+    </div>
+
     <!-- Peran Pengguna (Roles) -->
     <div class="border-t border-slate-200 pt-6">
         <label class="block text-xs font-bold text-slate-700 mb-3 uppercase tracking-wider">
@@ -151,7 +166,8 @@
     <!-- Konfirmasi Kata Sandi Admin (Wajib untuk Mengesahkan Aksi Backend) -->
     <div class="border-t border-slate-200 pt-6 bg-slate-50/80 -mx-6 -mb-6 p-6 rounded-b-xl">
         <div class="max-w-md">
-            <label for="current_password" class="block text-xs font-bold text-slate-800 mb-1 uppercase tracking-wider">
+            <label for="current_password"
+                class="block text-xs font-bold text-slate-800 mb-1 uppercase tracking-wider">
                 Konfirmasi Kata Sandi Admin Anda <span class="text-rose-500">*</span>
             </label>
             <p class="text-xs text-slate-500 mb-3">

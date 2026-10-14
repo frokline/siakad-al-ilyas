@@ -10,8 +10,9 @@
         $label = 'mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500';
     @endphp
 
+    {{-- Header halaman --}}
     <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+        <div class="min-w-0">
             <nav class="mb-2 flex items-center gap-2 text-xs text-slate-500" aria-label="Breadcrumb">
                 @if (Route::has('admin.dashboard'))
                     <a href="{{ route('admin.dashboard') }}" class="hover:text-siakad-dark">Dashboard</a>
@@ -19,16 +20,47 @@
                 @endif
                 <span class="font-medium text-slate-700">Registrasi Semester</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900">Registrasi Semester</h1>
-            <p class="mt-1 text-sm text-slate-500">Penempatan mahasiswa pada rombel dan periode akademik.</p>
+
+            <h1 class="text-2xl font-bold text-slate-900">
+                Registrasi Semester
+            </h1>
+            <p class="mt-1 text-sm text-slate-500">
+                Penempatan mahasiswa pada rombel dan periode akademik.
+            </p>
         </div>
-        <a href="{{ route('admin.registrasi-semester.create') }}"
-            class="inline-flex items-center justify-center gap-2 rounded-xl bg-siakad-dark px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-siakad-active focus:outline-none focus:ring-2 focus:ring-siakad-dark/40">
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            Tambah Registrasi
-        </a>
+
+        <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <a href="{{ route(
+                'admin.registrasi-semester.export',
+                request()->only(['q', 'periode_akademik_id', 'program_studi_id', 'semester_studi', 'status']),
+            ) }}"
+                class="inline-flex w-full items-center justify-center gap-2 rounded-xl
+                    border border-emerald-700 bg-white px-5 py-2.5 text-sm
+                    font-semibold text-emerald-800 transition hover:bg-emerald-50
+                    focus:outline-none focus:ring-2 focus:ring-emerald-700/30
+                    sm:w-auto">
+
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 12-4-4m4 4 4-4M5 20h14" />
+                </svg>
+
+                Ekspor Excel
+            </a>
+
+            <a href="{{ route('admin.registrasi-semester.create') }}"
+                class="inline-flex w-full items-center justify-center gap-2 rounded-xl
+                    bg-siakad-dark px-5 py-2.5 text-sm font-semibold text-white
+                    shadow-sm transition hover:bg-siakad-active
+                    focus:outline-none focus:ring-2 focus:ring-siakad-dark/40
+                    sm:w-auto">
+
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+
+                Tambah Registrasi
+            </a>
+        </div>
     </div>
 
     {{-- Filter --}}

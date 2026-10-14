@@ -6,12 +6,14 @@ use App\Actions\KelolaTagihan;
 use App\Http\Requests\TagihanRequest;
 use App\Http\Requests\TagihanStatusRequest;
 use App\Models\JenisBiaya;
+use App\Models\Pembayaran;
 use App\Models\Tagihan;
 use App\Services\AksesTagihan;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -29,6 +31,10 @@ class TagihanController extends Controller
             'page' => ['nullable', 'integer', 'between:1,100000']
         ]);
         $q = $akses->batasi(Tagihan::query(), $r->user())->with(['mahasiswa.user', 'jenisBiaya']);
+        $punyaPembayaran = Schema::hasTable((new Pembayaran())->getTable());
+        if ($punyaPembayaran) {
+            $q->with(['pembayaran' => fn ($pembayaran) => $pembayaran->whereIn('status', [Pembayaran::MENUNGGU, Pembayaran::DITERIMA])]);
+        }
         if (! empty($filter['q'])) {
             $q->where('nomor', 'like', '%' . $filter['q'] . '%');
         }
@@ -37,7 +43,7 @@ class TagihanController extends Controller
                 $q->where($col, $filter[$key]);
             }
         }
-        return view('tagihan.index', ['daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(), 'filter' => $filter]);
+        return view('tagihan.index', ['daftar' => $q->orderByDesc('id')->paginate(20)->withQueryString(), 'filter' => $filter, 'punyaPembayaran' => $punyaPembayaran]);
     }
     public function create(Request $r): View
     {

@@ -7,6 +7,8 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
     <title>@yield('title', 'SIAKAD') — ILYAS INSTITUT</title>
+    {{-- Favicon ILYAS INSTITUT --}}
+    <link rel="icon" type="image/png" sizes="512x512" href="{{ asset('images/favicon-rapi.png') }}?v=1">
 
     <script src="https://cdn.tailwindcss.com"></script>
 

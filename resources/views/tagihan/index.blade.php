@@ -106,11 +106,16 @@
                         <th class="px-5 py-3 text-right">Nominal</th>
                         <th class="px-5 py-3">Jatuh tempo</th>
                         <th class="px-5 py-3">Status</th>
+                        <th class="px-5 py-3">Pembayaran</th>
                         <th class="px-5 py-3 text-right">Aksi</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     @forelse($daftar as $t)
+                        @php
+                            $diterima = $punyaPembayaran ? $t->pembayaran->firstWhere('status', \App\Models\Pembayaran::DITERIMA) : null;
+                            $menunggu = $punyaPembayaran ? $t->pembayaran->firstWhere('status', \App\Models\Pembayaran::MENUNGGU) : null;
+                        @endphp
                         <tr class="hover:bg-slate-50/70">
                             <td class="whitespace-nowrap px-5 py-4 font-semibold text-slate-800">
                                 <a href="{{ route('tagihan.show', $t) }}"
@@ -135,14 +140,36 @@
                             <td class="whitespace-nowrap px-5 py-4 text-slate-700">
                                 {{ $t->jatuh_tempo->format('d-m-Y') }}</td>
                             <td class="px-5 py-4">@include('tagihan._lencana', ['status' => $t->status])</td>
+                            <td class="px-5 py-4">
+                                @if ($diterima)
+                                    <span
+                                        class="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">Lunas</span>
+                                @elseif ($menunggu)
+                                    <span
+                                        class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">Menunggu
+                                        verifikasi</span>
+                                @else
+                                    <span
+                                        class="inline-flex items-center rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">Belum
+                                        bayar</span>
+                                @endif
+                            </td>
                             <td class="px-5 py-4 text-right">
-                                <a href="{{ route('tagihan.show', $t) }}"
-                                    class="inline-flex rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Detail</a>
+                                <div class="flex items-center justify-end gap-2">
+                                    @if ($punyaPembayaran && !$petugas && !$diterima && !$menunggu)
+                                        @can('create', [\App\Models\Pembayaran::class, $t])
+                                            <a href="{{ route('pembayaran.create', $t) }}"
+                                                class="inline-flex rounded-lg bg-siakad-dark px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-800">Ajukan</a>
+                                        @endcan
+                                    @endif
+                                    <a href="{{ route('tagihan.show', $t) }}"
+                                        class="inline-flex rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Detail</a>
+                                </div>
                             </td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="{{ $petugas ? 7 : 6 }}" class="px-5 py-12 text-center text-slate-500">
+                            <td colspan="{{ $petugas ? 8 : 7 }}" class="px-5 py-12 text-center text-slate-500">
                                 <svg class="mx-auto mb-3 h-10 w-10 text-slate-300" fill="none" viewBox="0 0 24 24"
                                     stroke="currentColor" stroke-width="1.5">
                                     <path stroke-linecap="round" stroke-linejoin="round"

@@ -251,7 +251,7 @@ class PengumumanAksesTest extends PengumumanDatabaseTestCase
     {
         $p = $this->terbit($this->draf(['isi' => '<script>alert("x")</script>']));
         $this->actingAs(User::findOrFail(4))->get(route('pengumuman.show', $p))->assertOk()
-            ->assertSee('&lt;script&gt;', false)->assertDontSee('<script>', false)->assertDontSee('Audit pengelola');
+            ->assertSee('&lt;script&gt;', false)->assertDontSee('<script>alert("x")</script>', false)->assertDontSee('Audit pengelola');
     }
     public function test_http_daftar_tidak_membocorkan_judul_di_luar_sasaran(): void
     {

@@ -2,16 +2,37 @@
 @section('title', 'Daftar Pertemuan Presensi')
 
 @section('content')
-    <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-xl font-bold text-slate-800">Presensi Perkuliahan</h1>
-            <p class="text-sm text-slate-500 mt-1">Pilih pertemuan yang akan dicatat. Zona waktu:
-                <strong>{{ $zona }}</strong>.</p>
+    {{-- Header Presensi --}}
+    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="min-w-0">
+            <h1 class="text-xl font-bold text-slate-800">
+                Presensi Perkuliahan
+            </h1>
+
+            <p class="mt-1 text-sm text-slate-500">
+                Pilih pertemuan yang akan dicatat.
+                Zona waktu: <strong>{{ $zona }}</strong>.
+            </p>
         </div>
+
+        <a href="{{ route('presensi.export', request()->only(['status', 'tanggal'])) }}"
+            class="inline-flex w-full items-center justify-center gap-2 rounded-lg
+                border border-emerald-700 bg-white px-4 py-2.5 text-sm
+                font-semibold text-emerald-800 shadow-sm transition-colors
+                hover:bg-emerald-50 focus:outline-none focus:ring-2
+                focus:ring-emerald-700/30 sm:w-auto">
+
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 12-4-4m4 4 4-4M5 20h14" />
+            </svg>
+
+            Ekspor Rekap Excel
+        </a>
     </div>
 
     <div class="rounded-xl bg-white p-5 shadow-sm border border-slate-200 mb-6">
-        <form method="GET" action="{{ route('presensi.index') }}" class="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
+        <form method="GET" action="{{ route('presensi.index') }}"
+            class="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
             <div class="sm:col-span-5 w-full">
                 <label for="status" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Status
                     Pertemuan</label>
@@ -75,7 +96,8 @@
                             </td>
                             <td class="px-6 py-4 text-xs text-slate-700">
                                 <div class="font-medium">
-                                    {{ $sesi->mulai_rencana ? $sesi->mulai_rencana->setTimezone($zona)->format('d-m-Y H:i') : '—' }}</div>
+                                    {{ $sesi->mulai_rencana ? $sesi->mulai_rencana->setTimezone($zona)->format('d-m-Y H:i') : '—' }}
+                                </div>
                                 <span class="text-slate-400 mt-0.5 block">s.d.
                                     {{ $sesi->selesai_rencana ? $sesi->selesai_rencana->setTimezone($zona)->format('H:i') : '—' }}</span>
                             </td>

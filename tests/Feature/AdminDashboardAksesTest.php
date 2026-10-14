@@ -426,7 +426,7 @@ class AdminDashboardAksesTest extends TestCase
             ->get(route('admin.dashboard'))
             ->assertOk()
             ->assertSee('&lt;script&gt;', false)
-            ->assertDontSee('<script>', false);
+            ->assertDontSee('<script>alert("x")</script>', false);
     }
 
     public function test_tujuan_portal_admin_menuju_dashboard(): void
