@@ -6,7 +6,6 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Middleware\AuthenticateBerkas;
 use App\Http\Middleware\AuthenticateKegiatan;
 use App\Http\Middleware\AuthenticateKeuangan;
-use App\Http\Middleware\AuthenticateMateri;
 use App\Http\Middleware\AuthenticatePengumpulan;
 use App\Http\Middleware\AuthenticatePresensi;
 use App\Http\Middleware\AuthenticateSurat;
@@ -29,7 +28,6 @@ use App\Http\Controllers\KurikulumController;
 use App\Http\Controllers\KurikulumMataKuliahController;
 use App\Http\Controllers\MahasiswaController;
 use App\Http\Controllers\MataKuliahController;
-use App\Http\Controllers\MateriController;
 use App\Http\Controllers\NotifikasiController;
 use App\Http\Controllers\PaketSemesterController;
 use App\Http\Controllers\PembayaranController;
@@ -805,48 +803,4 @@ Route::prefix('notifikasi')->name('notifikasi.')
             Route::post('/{notifikasi}/baca', 'baca')->name('baca');
             Route::post('/{notifikasi}/buka', 'buka')->name('buka');
         });
-    });
-
-// Materi Perkuliahan
-Route::prefix('materi')->name('materi.')
-    ->middleware([
-        AuthenticateMateri::class . ':web',
-        'auth.session',
-        'cache.headers:no_store;private',
-        'can:akses-materi',
-    ])
-    ->controller(MateriController::class)
-    ->where(['materi' => '[0-9]+'])
-    ->group(function (): void {
-        Route::get('/', 'index')->name('index');
-        Route::get('/create', 'create')->name('create');
-        Route::post('/', 'store')->middleware('throttle:30,1')->name('store');
-        Route::get('/{materi}', 'show')->name('show');
-        Route::get('/{materi}/edit', 'edit')->name('edit');
-        Route::patch('/{materi}', 'update')->middleware('throttle:30,1')->name('update');
-        Route::get('/kelas', 'kelas')->name('kelas');
-
-        Route::post('/{materi}/berkas/{lampiran}/tautan', 'tautan')
-            ->middleware('throttle:30,1')
-            ->name('tautan');
-
-        Route::get('/{materi}/berkas/{lampiran}', 'unduh')
-            ->middleware(['signed', 'throttle:30,1'])
-            ->name('unduh');
-
-        Route::post('/{materi}/terbitkan', 'terbitkan')
-            ->middleware('throttle:30,1')
-            ->name('terbitkan');
-
-        Route::post('/{materi}/tarik', 'tarik')
-            ->middleware('throttle:30,1')
-            ->name('tarik');
-
-        Route::post('/{materi}/arsipkan', 'arsipkan')
-            ->middleware('throttle:30,1')
-            ->name('arsipkan');
-
-        Route::post('/{materi}/pulihkan', 'pulihkan')
-            ->middleware('throttle:30,1')
-            ->name('pulihkan');
     });

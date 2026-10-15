@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\KalenderAkademik;
 use App\Models\Kegiatan;
 use App\Models\Krs;
-use App\Models\Materi;
 use App\Models\Pembayaran;
 use App\Models\Pengumuman;
 use App\Models\PermohonanSurat;
@@ -24,14 +23,6 @@ final class SumberNotifikasi
             'route' => 'pengumuman.show',
             'parameter' => 'pengumuman',
             'judul' => 'Pengumuman tersedia',
-        ],
-
-        'materi' => [
-            'tabel' => 'materi',
-            'model' => Materi::class,
-            'route' => 'materi.show',
-            'parameter' => 'materi',
-            'judul' => 'Pembaruan materi perkuliahan',
         ],
 
         'kegiatan' => [
@@ -149,22 +140,6 @@ final class SumberNotifikasi
             'pengumuman' =>
                 app(AksesPengumuman::class)
                     ->bacaan($query, $user),
-
-            'materi' =>
-                app(AksesMateri::class)
-                    ->batasi($query, $user)
-                    ->where(
-                        'materi.status',
-                        'terbit'
-                    )
-                    ->whereNotNull(
-                        'materi.terbit_at'
-                    )
-                    ->where(
-                        'materi.terbit_at',
-                        '<=',
-                        now('UTC')
-                    ),
 
             'kegiatan' =>
                 app(AksesKegiatan::class)

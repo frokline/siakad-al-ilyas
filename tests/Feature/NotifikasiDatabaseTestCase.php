@@ -35,7 +35,7 @@ abstract class NotifikasiDatabaseTestCase extends PengumumanDatabaseTestCase
             $t->id();
             $t->string('status');
         });
-        foreach (['materi', 'kegiatan'] as $table) {
+        foreach (['kegiatan'] as $table) {
             Schema::create($table, function (Blueprint $t): void {
                 $t->id();
                 $t->unsignedBigInteger('kelas_kuliah_id');

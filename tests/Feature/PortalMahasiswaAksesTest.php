@@ -338,9 +338,10 @@ class PortalMahasiswaAksesTest extends TestCase
         $this->actingAs(User::findOrFail(1))
             ->get(route('portal.mahasiswa.index'))
             ->assertOk()
-            ->assertSee('Selamat datang, Ahmad Mahasiswa')
+            ->assertSee('Selamat datang kembali,')
+            ->assertSee('Ahmad Mahasiswa')
             ->assertSee('20260001')
-            ->assertSee('Belum ada registrasi semester aktif.');
+            ->assertSee('Belum ada registrasi aktif');
     }
 
     public function test_admin_tidak_dapat_membuka_dashboard_mahasiswa(): void

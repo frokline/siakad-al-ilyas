@@ -217,7 +217,7 @@ class NotifikasiAksesTest extends NotifikasiDatabaseTestCase
         $this->sumberLain();
         $s = app(SumberNotifikasi::class);
         $u = User::findOrFail(4);
-        foreach (['materi', 'kegiatan', 'tagihan', 'pembayaran', 'surat', 'kalender'] as $jenis) {
+        foreach (['kegiatan', 'tagihan', 'pembayaran', 'surat', 'kalender'] as $jenis) {
             $this->assertTrue($s->query($jenis, $u)->whereKey(1)->exists(), $jenis);
             $this->assertTrue(app(KelolaNotifikasi::class)->kirim(4, $jenis, 1), $jenis);
             $this->assertStringStartsWith('/', $s->tujuan($jenis, 1));
@@ -257,17 +257,17 @@ class NotifikasiAksesTest extends NotifikasiDatabaseTestCase
     {
         $this->sumberLain();
         $a = app(KelolaNotifikasi::class);
-        $a->kirim(4, 'materi', 1);
+        $a->kirim(4, 'kegiatan', 1);
         $a->kirim(4, 'pembayaran', 1);
-        $this->actingAs(User::findOrFail(4))->get(route('notifikasi.index', ['jenis' => 'materi']))->assertOk()
-            ->assertSee('Pembaruan materi perkuliahan')->assertDontSee('Pembaruan pengajuan pembayaran');
+        $this->actingAs(User::findOrFail(4))->get(route('notifikasi.index', ['jenis' => 'kegiatan']))->assertOk()
+            ->assertSee('Pembelajaran baru tersedia')->assertDontSee('Pembaruan pengajuan pembayaran');
     }
     public function test_sumber_dihapus_membuat_referensi_tidak_terlihat(): void
     {
         $this->sumberLain();
-        app(KelolaNotifikasi::class)->kirim(4, 'materi', 1);
+        app(KelolaNotifikasi::class)->kirim(4, 'kegiatan', 1);
         $n = Notifikasi::query()->firstOrFail();
-        DB::table('materi')->where('id', 1)->delete();
+        DB::table('kegiatan')->where('id', 1)->delete();
         $this->assertFalse(app(AksesNotifikasi::class)->lihat(User::findOrFail(4), $n));
     }
     public function test_unique_database_menolak_peristiwa_ganda(): void

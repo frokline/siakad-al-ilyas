@@ -34,7 +34,7 @@ class PresensiRekapExport extends DefaultValueBinder implements
         private readonly User $user,
         private readonly AksesPresensi $akses,
         private readonly array $filter = [],
-        private readonly string $zona = 'Asia/Jakarta',
+        private readonly string $zona = 'Asia/Makassar',
     ) {
     }
 
