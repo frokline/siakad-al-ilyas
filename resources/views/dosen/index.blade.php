@@ -27,7 +27,7 @@
                 <label for="q"
                     class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Pencarian</label>
                 <input id="q" name="q" type="text" value="{{ $filters['q'] ?? '' }}" maxlength="150"
-                    placeholder="Kode dosen, NIDN, nama, atau akun"
+                    placeholder="Kode dosen, NID-IIN, nama, atau akun"
                     class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white">
             </div>
 
@@ -88,7 +88,7 @@
                         <th scope="col" class="px-6 py-4 font-semibold w-16">No.</th>
                         <th scope="col" class="px-6 py-4 font-semibold">Kode Dosen</th>
                         <th scope="col" class="px-6 py-4 font-semibold">Nama Dosen</th>
-                        <th scope="col" class="px-6 py-4 font-semibold">NIDN</th>
+                        <th scope="col" class="px-6 py-4 font-semibold">NID-IIN</th>
                         <th scope="col" class="px-6 py-4 font-semibold text-center">Status Dosen</th>
                         <th scope="col" class="px-6 py-4 font-semibold text-center">Status Akun</th>
                         <th scope="col" class="px-6 py-4 font-semibold text-right">Tindakan</th>

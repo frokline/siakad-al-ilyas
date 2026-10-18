@@ -56,7 +56,7 @@
                 </div>
 
                 <div class="border-b border-slate-100 pb-4">
-                    <dt class="text-xs font-bold text-slate-400 uppercase tracking-wider">NIDN</dt>
+                    <dt class="text-xs font-bold text-slate-400 uppercase tracking-wider">NID-IIN</dt>
                     <dd class="mt-1 font-mono text-slate-700">{{ $dosen->nidn ?? 'Belum diisi' }}</dd>
                 </div>
 

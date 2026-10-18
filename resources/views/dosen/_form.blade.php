@@ -78,12 +78,12 @@
         </div>
 
         <div>
-            <label for="nidn" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">NIDN
+            <label for="nidn" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">NID-IIN
                 <span class="text-slate-400 font-normal">— opsional</span></label>
             <input id="nidn" name="nidn" type="text" inputmode="numeric"
                 value="{{ $value('nidn', $dosen->nidn) }}" maxlength="40" autocomplete="off" spellcheck="false"
                 class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white @error('nidn') border-rose-500 bg-rose-50/50 @enderror">
-            <p class="mt-1 text-xs text-slate-500">Isi angka tanpa spasi. Kosongkan jika belum memiliki NIDN.</p>
+            <p class="mt-1 text-xs text-slate-500">Isi angka tanpa spasi. Kosongkan jika belum memiliki NID-IIN.</p>
 
             @error('nidn')
                 <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
