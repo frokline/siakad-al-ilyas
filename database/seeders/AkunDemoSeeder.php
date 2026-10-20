@@ -8,8 +8,52 @@ use Illuminate\Support\Facades\Hash;
 
 class AkunDemoSeeder extends Seeder
 {
+    /**
+     * Kredensial demo. Hanya untuk pengembangan lokal dan tidak boleh
+     * ada di produksi; diperiksa oleh perintah siakad:periksa-produksi.
+     */
+    public const AKUN_DEMO = [
+        [
+            'username' => 'mahasiswa',
+            'email' => 'mahasiswa@ilyasinstitute.ac.id',
+            'password' => 'Mahasiswa!2026',
+            'nama' => 'Ahmad Fauzan',
+            'role' => 'mahasiswa',
+        ],
+        [
+            'username' => 'dosen',
+            'email' => 'dosen@ilyasinstitute.ac.id',
+            'password' => 'Dosen!2026',
+            'nama' => 'Muhammad Afdhal',
+            'role' => 'dosen',
+        ],
+        [
+            'username' => 'admin',
+            'email' => 'admin@ilyasinstitute.ac.id',
+            'password' => 'AdminIlyas!2026',
+            'nama' => 'Administrator Akademik',
+            'role' => 'admin_akademik',
+        ],
+        [
+            'username' => 'keuangan',
+            'email' => 'keuangan@ilyasinstitute.ac.id',
+            'password' => 'Keuangan!2026',
+            'nama' => 'Administrator Keuangan',
+            'role' => 'admin_keuangan',
+        ],
+    ];
+
     public function run(): void
     {
+        if (app()->isProduction()) {
+            $this->command?->warn(
+                'Akun demo tidak dibuat di environment produksi. '
+                . 'Buat akun admin dengan: php artisan siakad:buat-admin',
+            );
+
+            return;
+        }
+
         DB::transaction(function (): void {
             $now = now();
 
@@ -31,38 +75,7 @@ class AkunDemoSeeder extends Seeder
                 );
             }
 
-            $akun = [
-                [
-                    'username' => 'mahasiswa',
-                    'email' => 'mahasiswa@ilyasinstitute.ac.id',
-                    'password' => 'Mahasiswa!2026',
-                    'nama' => 'Ahmad Fauzan',
-                    'role' => 'mahasiswa',
-                ],
-                [
-                    'username' => 'dosen',
-                    'email' => 'dosen@ilyasinstitute.ac.id',
-                    'password' => 'Dosen!2026',
-                    'nama' => 'Muhammad Afdhal',
-                    'role' => 'dosen',
-                ],
-                [
-                    'username' => 'admin',
-                    'email' => 'admin@ilyasinstitute.ac.id',
-                    'password' => 'AdminIlyas!2026',
-                    'nama' => 'Administrator Akademik',
-                    'role' => 'admin_akademik',
-                ],
-                [
-                    'username' => 'keuangan',
-                    'email' => 'keuangan@ilyasinstitute.ac.id',
-                    'password' => 'Keuangan!2026',
-                    'nama' => 'Administrator Keuangan',
-                    'role' => 'admin_keuangan',
-                ],
-            ];
-
-            foreach ($akun as $data) {
+            foreach (self::AKUN_DEMO as $data) {
                 DB::table('users')->updateOrInsert(
                     ['username' => $data['username']],
                     [

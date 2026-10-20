@@ -53,6 +53,7 @@ use App\Http\Controllers\RombelController;
 use App\Http\Controllers\TagihanController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\PortalFotoProfilMahasiswaController;
+use App\Http\Controllers\Portal\PortalBiodataMahasiswaController;
 
 /*
 |--------------------------------------------------------------------------
@@ -138,6 +139,24 @@ Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private']
                 Route::get('/edit', 'edit')->name('edit');
                 Route::patch('/', 'update')->name('update');
             });
+
+        //biodata mahasiswa
+        Route::get('/biodata', [
+            \App\Http\Controllers\Portal\PortalBiodataMahasiswaController::class,
+            'show',
+        ])->name('portal.biodata.show');
+
+        Route::get('/biodata/edit', [
+            \App\Http\Controllers\Portal\PortalBiodataMahasiswaController::class,
+            'edit',
+        ])->name('portal.biodata.edit');
+
+        Route::patch('/biodata', [
+            \App\Http\Controllers\Portal\PortalBiodataMahasiswaController::class,
+            'update',
+        ])->name('portal.biodata.update');
+
+
         Route::get(
             '/profil-saya/foto',
             [PortalFotoProfilMahasiswaController::class, 'show']
@@ -335,6 +354,7 @@ Route::prefix('admin')
                     Route::patch('/{mahasiswa}', 'update')->name('update');
                 });
             });
+
 
         // Paket Semester
         Route::controller(PaketSemesterController::class)->prefix('paket-semester')->name('paket-semester.')

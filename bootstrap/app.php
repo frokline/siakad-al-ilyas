@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AutoSecureSessionCookie;
 use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -18,6 +19,10 @@ return Application::configure(
             /*
              * Dipasang untuk seluruh respons HTTP aplikasi.
              */
+            $middleware->append(
+                AutoSecureSessionCookie::class
+            );
+
             $middleware->append(
                 SecurityHeaders::class
             );

@@ -111,4 +111,30 @@ class Mahasiswa extends Model
     {
         return $this->hasMany(\App\Models\PermohonanSurat::class, 'mahasiswa_id');
     }
+
+
+    public function biodata(): HasOne
+    {
+        return $this->hasOne(MahasiswaBiodata::class);
+    }
+
+    public function alamatBiodata(): HasOne
+    {
+        return $this->hasOne(MahasiswaAlamat::class);
+    }
+
+    public function pendidikanAsal(): HasOne
+    {
+        return $this->hasOne(MahasiswaPendidikanAsal::class);
+    }
+
+    public function dataKeluarga(): HasMany
+    {
+        return $this->hasMany(MahasiswaKeluarga::class);
+    }
+
+    public function berkasBiodata(): HasMany
+    {
+        return $this->hasMany(MahasiswaBiodataBerkas::class);
+    }
 }

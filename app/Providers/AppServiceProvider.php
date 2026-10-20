@@ -26,6 +26,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $this->jagaKonfigurasiProduksi();
+
         Gate::define(
             'kelola-peran',
             fn(User $user): bool => $user->hasRole(Role::ADMIN_AKADEMIK),
@@ -291,5 +293,39 @@ class AppServiceProvider extends ServiceProvider
         // DI DALAM boot() AppServiceProvider, pertahankan registrasi lama.
         \Illuminate\Support\Facades\Gate::policy(\App\Models\Notifikasi::class, \App\Policies\NotifikasiPolicy::class);
         \Illuminate\Support\Facades\Gate::define('akses-notifikasi', fn(\App\Models\User $u): bool => app(\App\Services\AksesNotifikasi::class)->masuk($u));
+    }
+
+    /**
+     * Pengaman terakhir ketika aplikasi berjalan di environment produksi:
+     * mode debug dipaksa mati dan konfigurasi yang salah dilaporkan ke log,
+     * agar stack trace maupun tautan rusak tidak bocor ke publik.
+     */
+    private function jagaKonfigurasiProduksi(): void
+    {
+        if (! app()->environment('production')) {
+            return;
+        }
+
+        if (config('app.debug')) {
+            config(['app.debug' => false]);
+
+            logger()->critical(
+                'APP_DEBUG masih aktif di produksi. Mode debug dipaksa mati; set APP_DEBUG=false di .env.',
+            );
+        }
+
+        $url = (string) config('app.url');
+
+        if ($url === '' || str_contains($url, 'localhost') || str_contains($url, '127.0.0.1')) {
+            logger()->critical(
+                'APP_URL ("' . $url . '") belum menunjuk domain produksi. Seluruh tautan unduh bermeterai (signed URL) tidak akan valid. Set APP_URL di .env.',
+            );
+        }
+
+        if (str_starts_with($url, 'http://')) {
+            logger()->critical(
+                'APP_URL ("' . $url . '") memakai http://. Tautan unduh dan cookie session menjadi tidak aman di produksi.',
+            );
+        }
     }
 }
