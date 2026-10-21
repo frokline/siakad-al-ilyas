@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\KelolaBerkas;
 use App\Exports\MahasiswaExport;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Http\Requests\MahasiswaRequest;
+use App\Models\Berkas;
 use App\Models\Mahasiswa;
+use App\Models\MahasiswaBiodataBerkas;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
@@ -15,6 +18,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -68,25 +72,25 @@ class MahasiswaController extends Controller
 
         return view('mahasiswa.index', compact('daftar', 'filter'));
     }
-public function export(Request $request)
-{
-    Gate::authorize('kelola-mahasiswa');
+    public function export(Request $request)
+    {
+        Gate::authorize('kelola-mahasiswa');
 
-    $filter = $request->validate([
-        'q' => ['nullable', 'string', 'max:100'],
-        'status_akun' => [
-            'nullable',
-            Rule::in(['aktif', 'nonaktif']),
-        ],
-    ]);
+        $filter = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'status_akun' => [
+                'nullable',
+                Rule::in(['aktif', 'nonaktif']),
+            ],
+        ]);
 
-    $namaFile = 'rekap-mahasiswa-' . now()->format('Ymd-His') . '.xlsx';
+        $namaFile = 'rekap-mahasiswa-' . now()->format('Ymd-His') . '.xlsx';
 
-    return Excel::download(
-        new MahasiswaExport($filter),
-        $namaFile
-    );
-}
+        return Excel::download(
+            new MahasiswaExport($filter),
+            $namaFile
+        );
+    }
 
     public function create(Request $request): View
     {
@@ -145,7 +149,14 @@ public function export(Request $request)
     {
         Gate::authorize('kelola-mahasiswa');
 
-        $mahasiswa->load('user');
+        $mahasiswa->load([
+            'user',
+            'biodata',
+            'alamatBiodata',
+            'pendidikanAsal',
+            'dataKeluarga',
+            'berkasBiodata.berkas',
+        ]);
 
         $riwayatDaftar = $mahasiswa->riwayatStudi()
             ->with('kurikulum.programStudi')
@@ -153,31 +164,65 @@ public function export(Request $request)
             ->orderByDesc('id')
             ->paginate(10);
 
-        return view('mahasiswa.show', compact(
-            'mahasiswa',
-            'riwayatDaftar'
-        ));
+        return view('mahasiswa.show', [
+            'mahasiswa' => $mahasiswa,
+            'riwayatDaftar' => $riwayatDaftar,
+            'biodata' => $mahasiswa->biodata,
+            'alamatBiodata' => $mahasiswa->alamatBiodata,
+            'pendidikanAsal' => $mahasiswa->pendidikanAsal,
+            'dataKeluarga' => $mahasiswa->dataKeluarga,
+            'berkasBiodata' => $mahasiswa->berkasBiodata,
+        ]);
     }
 
-    public function edit(Mahasiswa $mahasiswa): View
+    public function edit(Request $request, Mahasiswa $mahasiswa): View
     {
         Gate::authorize('kelola-mahasiswa');
 
-        $mahasiswa->load('user');
+        $mahasiswa->load([
+            'user',
+            'biodata',
+            'alamatBiodata',
+            'pendidikanAsal',
+            'dataKeluarga',
+            'berkasBiodata.berkas',
+        ]);
 
         abort_if($mahasiswa->user === null, 404);
+
+        $tabDiperbolehkan = [
+            'identitas',
+            'biodata',
+            'alamat',
+            'pendidikan',
+            'keluarga',
+            'berkas',
+        ];
+
+        $tab = $request->query('tab');
 
         return view('mahasiswa.edit', [
             'mahasiswa' => $mahasiswa,
             'akun' => $mahasiswa->user,
+            'biodata' => $mahasiswa->biodata,
+            'alamatBiodata' => $mahasiswa->alamatBiodata,
+            'pendidikanAsal' => $mahasiswa->pendidikanAsal,
+            'dataKeluarga' => $mahasiswa->dataKeluarga,
+            'berkasBiodata' => $mahasiswa->berkasBiodata,
+            'tab' => in_array($tab, $tabDiperbolehkan, true)
+                ? $tab
+                : 'identitas',
         ]);
     }
 
     public function update(
         MahasiswaRequest $request,
-        Mahasiswa $mahasiswa
+        Mahasiswa $mahasiswa,
+        KelolaBerkas $unggahBerkas
     ): RedirectResponse {
         $hasil = $this->simpan($request, $mahasiswa);
+
+        $this->simpanBagianBiodata($request, $hasil, $unggahBerkas);
 
         return to_route('admin.mahasiswa.show', $hasil)
             ->with('success', 'Data mahasiswa berhasil diperbarui.');
@@ -285,8 +330,15 @@ public function export(Request $request)
                     'tanggal_lahir',
                     'jenis_kelamin',
                     'alamat',
+                    'konsentrasi',
+                    'sistem_kuliah',
+                    'jenis_pendaftaran',
+                    'jalur_pendaftaran',
+                    'gelombang',
+                    'tanggal_awal_masuk',
+                    'tanggal_daftar_ulang',
+                    'kebutuhan_khusus',
                 ]));
-
                 $record->save();
 
                 return $record;
@@ -304,6 +356,161 @@ public function export(Request $request)
             throw ValidationException::withMessages([
                 'nim' => 'NIM sudah digunakan mahasiswa lain.',
             ]);
+        }
+    }
+
+    private function simpanBagianBiodata(
+        MahasiswaRequest $request,
+        Mahasiswa $mahasiswa,
+        KelolaBerkas $unggahBerkas
+    ): void {
+        $data = Arr::map(
+            $request->validated(),
+            static fn(mixed $nilai): mixed =>
+                is_string($nilai) && trim($nilai) === '' ? null : $nilai
+        );
+
+        DB::transaction(function () use ($mahasiswa, $data): void {
+            $mahasiswa->biodata()->updateOrCreate(
+                [],
+                Arr::only($data, [
+                    'agama',
+                    'suku',
+                    'kewarganegaraan',
+                    'nik',
+                    'nomor_kk',
+                    'npwp',
+                    'nomor_kps',
+                    'golongan_darah',
+                    'status_nikah',
+                    'ukuran_jas_almamater',
+                    'nomor_hp',
+                    'email_pribadi',
+                    'pekerjaan',
+                    'instansi_pekerjaan',
+                    'penghasilan',
+                    'nomor_rekening',
+                    'nama_rekening',
+                    'nama_bank',
+                    'berat_badan',
+                    'tinggi_badan',
+                    'transportasi',
+                ])
+            );
+
+            $mahasiswa->alamatBiodata()->updateOrCreate(
+                [],
+                Arr::only($data, [
+                    'alamat_ktp',
+                    'rt_ktp',
+                    'rw_ktp',
+                    'dusun_ktp',
+                    'desa_kelurahan_ktp',
+                    'provinsi_ktp',
+                    'kota_kabupaten_ktp',
+                    'kecamatan_ktp',
+                    'kode_pos_ktp',
+                    'domisili_sama_dengan_ktp',
+                    'alamat_domisili',
+                    'rt_domisili',
+                    'rw_domisili',
+                    'dusun_domisili',
+                    'desa_kelurahan_domisili',
+                    'provinsi_domisili',
+                    'kota_kabupaten_domisili',
+                    'kecamatan_domisili',
+                    'kode_pos_domisili',
+                    'status_tinggal',
+                ])
+            );
+
+            $mahasiswa->pendidikanAsal()->updateOrCreate(
+                [],
+                Arr::only($data, [
+                    'jenis_pendidikan_asal',
+                    'perguruan_tinggi',
+                    'program_studi_asal',
+                    'ipk',
+                    'sks_diakui',
+                    'nomor_ijazah',
+                    'nisn',
+                ])
+            );
+
+            $keluarga = $data['keluarga'] ?? [];
+
+            foreach (['ayah', 'ibu', 'wali'] as $jenis) {
+                if (
+                    ! is_array($keluarga[$jenis] ?? null)
+                ) {
+                    continue;
+                }
+
+                $mahasiswa->dataKeluarga()->updateOrCreate(
+                    [
+                        'jenis_hubungan' => $jenis,
+                    ],
+                    Arr::only($keluarga[$jenis], [
+                        'nama_lengkap',
+                        'nik',
+                        'tanggal_lahir',
+                        'status_hidup',
+                        'status_kekerabatan',
+                        'pendidikan_terakhir',
+                        'pekerjaan',
+                        'penghasilan',
+                        'alamat',
+                        'nomor_telepon',
+                        'email',
+                    ])
+                );
+            }
+        });
+
+        $jenisBerkas = [
+            'ijazah_terakhir' => 'Scan Ijazah Asli',
+            'transkrip' => 'Scan Transkrip Nilai',
+            'ktp' => 'Scan KTP',
+            'kartu_keluarga' => 'Scan Kartu Keluarga (KK)',
+            'akta_kelahiran' => 'Scan Akta Kelahiran',
+            'pas_foto_3x4' => 'Pas Foto 3x4',
+        ];
+
+        foreach ($jenisBerkas as $jenis => $judul) {
+            $file = $request->file('berkas_' . $jenis);
+
+            if (
+                ! $file instanceof \Illuminate\Http\UploadedFile
+                || ! $file->isValid()
+            ) {
+                continue;
+            }
+
+            $berkas = $unggahBerkas->unggah(
+                (int) $mahasiswa->user_id,
+                $file,
+                [
+                    'upload_token' => (string) Str::uuid(),
+                    'label' => $judul . ' - ' . $mahasiswa->nim,
+                    'keterangan' =>
+                        'Berkas biodata mahasiswa ' . $mahasiswa->nim,
+                ]
+            );
+
+            if ($berkas->status !== Berkas::TERSEDIA) {
+                continue;
+            }
+
+            MahasiswaBiodataBerkas::query()->updateOrCreate(
+                [
+                    'mahasiswa_id' => $mahasiswa->id,
+                    'jenis_berkas' => $jenis,
+                    'aktif' => true,
+                ],
+                [
+                    'berkas_id' => $berkas->id,
+                ]
+            );
         }
     }
 }

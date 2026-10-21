@@ -27,6 +27,16 @@ class Mahasiswa extends Model
         'tanggal_lahir',
         'jenis_kelamin',
         'alamat',
+
+        //penambahaan baru database baru
+        'konsentrasi',
+        'sistem_kuliah',
+        'jenis_pendaftaran',
+        'jalur_pendaftaran',
+        'gelombang',
+        'tanggal_awal_masuk',
+        'tanggal_daftar_ulang',
+        'kebutuhan_khusus',
     ];
 
     protected function casts(): array
@@ -34,6 +44,8 @@ class Mahasiswa extends Model
         return [
             'user_id' => 'integer',
             'tanggal_lahir' => 'immutable_date',
+            'tanggal_awal_masuk' => 'immutable_date',
+            'tanggal_daftar_ulang' => 'immutable_date',
         ];
     }
 

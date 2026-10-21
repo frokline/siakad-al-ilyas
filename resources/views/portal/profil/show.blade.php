@@ -169,8 +169,103 @@
                     <dl class="grid grid-cols-1 gap-4 p-6 sm:grid-cols-2 sm:p-7">
                         <div class="rounded-xl border border-slate-100 p-4">
                             <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">NIM</dt>
-                            <dd class="mt-2 text-sm font-bold text-emerald-800">{{ $mahasiswa->nim }}</dd>
+                            <dd class="mt-2 text-sm font-bold text-emerald-800">
+                                {{ $mahasiswa->nim ?: '—' }}
+                            </dd>
                         </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Nama Mahasiswa</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $user->nama ?: '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Program Studi</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $riwayatAktif?->kurikulum?->programStudi?->nama ?? '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Konsentrasi</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->konsentrasi ?: '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Tahun Kurikulum</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $riwayatAktif?->kurikulum?->tahun_berlaku ?? '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Sistem Kuliah</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->sistem_kuliah ?: '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Periode Masuk</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $riwayatAktif?->periodeMulai?->kode ?? '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Status Mahasiswa</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $riwayatAktif ? ucfirst($riwayatAktif->status) : 'Belum ada studi aktif' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Jenis Pendaftaran
+                            </dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->jenis_pendaftaran ?: '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Jalur Pendaftaran
+                            </dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->jalur_pendaftaran ?: '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Gelombang</dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->gelombang ?: '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Tanggal Awal Masuk
+                            </dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->tanggal_awal_masuk
+                                    ? \Illuminate\Support\Carbon::parse($mahasiswa->tanggal_awal_masuk)->format('d-m-Y')
+                                    : '—' }}
+                            </dd>
+                        </div>
+
+                        <div class="rounded-xl border border-slate-100 p-4">
+                            <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Tanggal Daftar Ulang
+                            </dt>
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->tanggal_daftar_ulang
+                                    ? \Illuminate\Support\Carbon::parse($mahasiswa->tanggal_daftar_ulang)->format('d-m-Y')
+                                    : '—' }}
+                            </dd>
+                        </div>
+
                         <div class="rounded-xl border border-slate-100 p-4">
                             <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Jenis Kelamin</dt>
                             <dd class="mt-2 text-sm font-semibold text-slate-900">
@@ -183,21 +278,28 @@
                                 @endif
                             </dd>
                         </div>
+
                         <div class="rounded-xl border border-slate-100 p-4">
                             <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Tempat Lahir</dt>
-                            <dd class="mt-2 text-sm font-semibold text-slate-900">{{ $mahasiswa->tempat_lahir ?: '—' }}
+                            <dd class="mt-2 text-sm font-semibold text-slate-900">
+                                {{ $mahasiswa->tempat_lahir ?: '—' }}
                             </dd>
                         </div>
+
                         <div class="rounded-xl border border-slate-100 p-4">
                             <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Tanggal Lahir</dt>
                             <dd class="mt-2 text-sm font-semibold text-slate-900">
-                                {{ $mahasiswa->tanggal_lahir ? \Illuminate\Support\Carbon::parse($mahasiswa->tanggal_lahir)->format('d-m-Y') : '—' }}
+                                {{ $mahasiswa->tanggal_lahir
+                                    ? \Illuminate\Support\Carbon::parse($mahasiswa->tanggal_lahir)->format('d-m-Y')
+                                    : '—' }}
                             </dd>
                         </div>
+
                         <div class="rounded-xl border border-slate-100 p-4 sm:col-span-2">
                             <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Alamat Lengkap</dt>
                             <dd class="mt-2 whitespace-pre-line text-sm leading-6 text-slate-900">
-                                {{ $mahasiswa->alamat ?: '—' }}</dd>
+                                {{ $mahasiswa->alamat ?: '—' }}
+                            </dd>
                         </div>
                     </dl>
                 </section>
@@ -276,7 +378,8 @@
                                                     stroke="currentColor" stroke-width="1.8">
                                                     <path stroke-linecap="round" stroke-linejoin="round"
                                                         d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-                                                </svg></div>
+                                                </svg>
+                                            </div>
                                             <p class="mt-3 text-sm font-semibold text-slate-700">Belum ada riwayat studi
                                             </p>
                                             <p class="mt-1 text-xs text-slate-500">Riwayat studi akan tampil jika sudah
@@ -379,7 +482,8 @@
                                     <path stroke-linecap="round" stroke-linejoin="round"
                                         d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z" />
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4" />
-                                </svg></div>
+                                </svg>
+                            </div>
                             <div>
                                 <h2 class="text-base font-bold">Status Studi Aktif</h2>
                                 <p class="mt-1 text-xs text-emerald-200">Informasi akademik terkini</p>
@@ -445,7 +549,8 @@
                                         stroke-width="1.8">
                                         <path stroke-linecap="round" stroke-linejoin="round"
                                             d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg></div>
+                                    </svg>
+                                </div>
                                 <p class="mt-3 text-sm font-semibold">Belum Ada Studi Aktif</p>
                                 <p class="mt-1 text-xs leading-5 text-emerald-200">Tidak ada riwayat studi aktif pada akun
                                     ini.</p>
@@ -462,7 +567,8 @@
                                 stroke-width="1.8">
                                 <path stroke-linecap="round" stroke-linejoin="round"
                                     d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg></div>
+                            </svg>
+                        </div>
                         <div>
                             <h2 class="text-sm font-bold text-slate-900">Informasi Akademik Terkunci</h2>
                             <p class="mt-2 text-sm leading-6 text-slate-600">Data akademik seperti NIM, program studi,

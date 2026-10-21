@@ -29,32 +29,101 @@
                     </div>
                 </div>
 
-                <div class="p-5 sm:p-6">
-                    <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
-                        <div class="shrink-0">
-                            <div class="flex h-16 w-16 items-center justify-center rounded-full text-2xl font-bold text-white"
-                                style="background:#047857;">
-                                {{ mb_strtoupper(mb_substr($mahasiswa->user->nama ?? 'M', 0, 1)) }}
-                            </div>
+
+
+                <div class="grid grid-cols-1 gap-5 lg:grid-cols-[226px_minmax(0,1fr)]">
+
+                    {{-- Kolom kiri: foto dan menu --}}
+                    <aside class="overflow-hidden border border-slate-200 bg-white">
+                        <div class="relative bg-slate-100">
+                            <img src="{{ route('portal.profil.foto') }}"
+                                alt="Foto {{ $mahasiswa->user->nama ?? 'mahasiswa' }}"
+                                class="h-[340px] w-full object-cover">
+
+                            <a href="{{ route('portal.profil.edit') }}"
+                                class="absolute right-0 top-0 bg-white/80 px-3 py-2 text-sm text-slate-700 hover:bg-white">
+                                Ganti Foto
+                            </a>
                         </div>
-                        <div class="min-w-0 flex-1">
-                            <div class="mb-1 text-sm text-slate-500">Nama Mahasiswa</div>
-                            <div class="text-xl font-bold text-slate-900">
-                                {{ $mahasiswa->user->nama ?? '-' }}
-                            </div>
-                            <div class="mt-1 text-sm text-slate-500">
-                                NIM: {{ $mahasiswa->nim ?: '-' }}
-                            </div>
+
+                        <nav class="divide-y divide-slate-200 text-sm">
+                            <a href="#biodata"
+                                class="block border-l-2 border-sky-500 bg-sky-50 px-3 py-3 font-medium text-sky-600">
+                                Biodata
+                            </a>
+
+                            <a href="{{ route('portal.profil.show') }}"
+                                class="block px-3 py-3 text-slate-600 hover:bg-slate-50">
+                                Riwayat Pendaftaran
+                            </a>
+                        </nav>
+                    </aside>
+
+                    {{-- Kolom kanan: tabel biodata --}}
+                    <section id="biodata" class="min-w-0 overflow-hidden border border-slate-200 bg-white">
+                        <div class="grid grid-cols-1 md:grid-cols-2 md:divide-x md:divide-slate-200">
+
+                            {{-- Kelompok kolom kiri --}}
+                            <dl class="divide-y divide-slate-200">
+                                @php
+                                    $barisKiri = [
+                                        'NIM' => $mahasiswa->nim,
+                                        'Nama Mahasiswa' => $user->nama ?? ($mahasiswa->user->nama ?? null),
+                                        'Program Studi' => $riwayatAktif?->kurikulum?->programStudi?->nama,
+                                        'Konsentrasi' => $mahasiswa->konsentrasi,
+                                        'Periode Masuk' => $riwayatAktif?->periodeMulai?->kode,
+                                        'Tahun Masuk' => $riwayatAktif?->angkatan,
+                                        'Tahun Kurikulum' => $riwayatAktif?->kurikulum?->tahun_berlaku,
+                                        'Sistem Kuliah' => $mahasiswa->sistem_kuliah,
+                                        'Kelas / Kelompok' => $riwayatAktif?->registrasiSemester
+                                            ?->filter(fn ($registrasi) => in_array($registrasi->status, ['terdaftar', 'aktif'], true))
+                                            ->sortByDesc('semester_studi')
+                                            ->first()?->rombel?->kode,
+                                        'Jenis Pendaftaran' => $mahasiswa->jenis_pendaftaran,
+                                    ];
+                                @endphp
+
+                                @foreach ($barisKiri as $label => $nilai)
+                                    <div class="grid grid-cols-[42%_58%] gap-2 px-4 py-3 text-sm">
+                                        <dt class="font-bold text-indigo-400">{{ $label }}</dt>
+                                        <dd class="break-words text-slate-900">{{ filled($nilai) ? $nilai : '—' }}</dd>
+                                    </div>
+                                @endforeach
+                            </dl>
+
+                            {{-- Kelompok kolom kanan --}}
+                            <dl class="divide-y divide-slate-200">
+                                @php
+                                    $barisKanan = [
+                                        'Jalur Pendaftaran' => $mahasiswa->jalur_pendaftaran,
+                                        'Gelombang' => $mahasiswa->gelombang,
+                                        'Tanggal Awal Masuk' => $mahasiswa->tanggal_awal_masuk
+                                            ? \Illuminate\Support\Carbon::parse(
+                                                $mahasiswa->tanggal_awal_masuk,
+                                            )->translatedFormat('j F Y')
+                                            : null,
+                                        'Tanggal Daftar Ulang' => $mahasiswa->tanggal_daftar_ulang
+                                            ? \Illuminate\Support\Carbon::parse(
+                                                $mahasiswa->tanggal_daftar_ulang,
+                                            )->translatedFormat('j F Y')
+                                            : null,
+                                        'Status Mahasiswa' => $user->status === 'aktif' ? 'Aktif' : 'Tidak Aktif',
+                                    ];
+                                @endphp
+
+                                @foreach ($barisKanan as $label => $nilai)
+                                    <div class="grid grid-cols-[42%_58%] gap-2 px-4 py-3 text-sm">
+                                        <dt class="font-bold text-indigo-400">{{ $label }}</dt>
+                                        <dd class="break-words text-slate-900">{{ filled($nilai) ? $nilai : '—' }}</dd>
+                                    </div>
+                                @endforeach
+                            </dl>
+
                         </div>
-                        <div class="sm:ml-auto">
-                            <span
-                                class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
-                                <i class="mr-1"></i>
-                                Data Pribadi
-                            </span>
-                        </div>
-                    </div>
+                    </section>
                 </div>
+
+
             </div>
 
             {{-- NOTIFIKASI --}}

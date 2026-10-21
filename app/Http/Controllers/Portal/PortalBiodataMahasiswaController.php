@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
+use App\Models\RiwayatStudi;
+
 
 class PortalBiodataMahasiswaController extends Controller
 {
@@ -41,13 +43,24 @@ class PortalBiodataMahasiswaController extends Controller
             ])
             ->firstOrFail();
 
+        $riwayatAktif = $mahasiswa->riwayatStudi()
+            ->where('status', RiwayatStudi::AKTIF)
+            ->with([
+                'kurikulum.programStudi',
+                'periodeMulai',
+                'registrasiSemester.rombel',
+            ])
+            ->first();
+
         return view('portal.biodata.show', [
+            'user' => $user,
             'mahasiswa' => $mahasiswa,
             'biodata' => $mahasiswa->biodata,
             'alamatBiodata' => $mahasiswa->alamatBiodata,
             'pendidikanAsal' => $mahasiswa->pendidikanAsal,
             'dataKeluarga' => $mahasiswa->dataKeluarga,
             'berkasBiodata' => $mahasiswa->berkasBiodata,
+            'riwayatAktif' => $riwayatAktif,
         ]);
     }
 

@@ -108,6 +108,24 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
+
+                        <tr class="hover:bg-slate-50 transition-colors">
+                            <td class="px-4 py-3 font-medium text-slate-800">
+                                Data Mahasiswa
+                            </td>
+                            <td class="px-4 py-3 text-center">
+                                {{ $ringkasan['mahasiswa'] }}
+                            </td>
+                            <td class="px-4 py-3 text-right">
+                                @can('kelola-mahasiswa')
+                                    <a href="{{ route('admin.mahasiswa.index') }}"
+                                        class="text-siakad-dark hover:underline font-semibold">
+                                        Kelola
+                                    </a>
+                                @endcan
+                            </td>
+                        </tr>
+
                         <tr class="hover:bg-slate-50 transition-colors">
                             <td class="px-4 py-3 font-medium text-slate-800">Program Studi</td>
                             <td class="px-4 py-3 text-center">{{ $ringkasan['program_studi'] }}</td>

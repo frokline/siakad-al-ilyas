@@ -14,8 +14,7 @@ final class PortalProfilMahasiswaController extends Controller
 {
     public function __construct(
         private readonly AksesProfilMahasiswa $aksesProfil
-    ) {
-    }
+    ) {}
 
     /**
      * Menampilkan profil dan riwayat akademik mahasiswa.
@@ -41,8 +40,8 @@ final class PortalProfilMahasiswaController extends Controller
 
         $jumlahRegistrasi = $mahasiswa->riwayatStudi
             ->sum(
-                static fn ($riwayat): int =>
-                    $riwayat->registrasiSemester->count()
+                static fn($riwayat): int =>
+                $riwayat->registrasiSemester->count()
             );
 
         return view('portal.profil.show', [
@@ -71,6 +70,16 @@ final class PortalProfilMahasiswaController extends Controller
         );
 
         $mahasiswa = $this->aksesProfil->profil($user);
+
+        $mahasiswa->loadMissing([
+            'user',
+            'riwayatStudi.kurikulum.programStudi',
+            'riwayatStudi.periodeMulai',
+            'riwayatStudi.periodeAkhir',
+            'riwayatStudi.dosenPa.user',
+            'riwayatStudi.registrasiSemester.periodeAkademik',
+            'riwayatStudi.registrasiSemester.rombel',
+        ]);
 
         return view('portal.profil.edit', [
             'mahasiswa' => $mahasiswa,
