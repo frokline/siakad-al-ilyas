@@ -54,7 +54,7 @@ use App\Http\Controllers\TagihanController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\PortalFotoProfilMahasiswaController;
 use App\Http\Controllers\Portal\PortalBiodataMahasiswaController;
-
+use App\Http\Controllers\Portal\PortalKtmMahasiswaController;
 /*
 |--------------------------------------------------------------------------
 | 1. LOGIN & LOGOUT (pintu masuk tunggal seluruh pengguna)
@@ -167,6 +167,21 @@ Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private']
             [PortalFotoProfilMahasiswaController::class, 'update']
         )->middleware('throttle:10,1')
             ->name('portal.profil.foto.update');
+
+        Route::patch(
+            '/profil-saya/password',
+            [PortalProfilMahasiswaController::class, 'updatePassword']
+        )->name('portal.profil.password.update');
+
+        Route::get('/biodata/cetak', [
+            PortalBiodataMahasiswaController::class,
+            'cetak',
+        ])->name('portal.biodata.cetak');
+
+        Route::get('/ktm', [
+            PortalKtmMahasiswaController::class,
+            'show',
+        ])->name('portal.ktm.show');
 
         // Kelas & peserta kelas milik dosen
         Route::prefix('dosen/kelas-saya')
@@ -347,6 +362,9 @@ Route::prefix('admin')
                 Route::get('/export', 'export')->name('export');
                 Route::get('/', 'index')->name('index');
                 Route::get('/create', 'create')->name('create');
+                Route::get('/{mahasiswa}/berkas/{berkas}/lihat', 'lihatBerkas')
+                    ->where(['berkas' => '[0-9]+'])
+                    ->name('berkas.lihat');
                 Route::get('/{mahasiswa}', 'show')->name('show');
                 Route::get('/{mahasiswa}/edit', 'edit')->name('edit');
                 Route::middleware('throttle:30,1')->group(function (): void {

@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\PerbaruiKataSandiMahasiswa;
 use App\Actions\PerbaruiProfilMahasiswa;
+use App\Http\Requests\PortalKataSandiMahasiswaRequest;
 use App\Http\Requests\PortalProfilMahasiswaRequest;
 use App\Services\AksesProfilMahasiswa;
 use Illuminate\Contracts\View\View;
@@ -111,6 +113,33 @@ final class PortalProfilMahasiswaController extends Controller
             ->with(
                 'info',
                 'Data pribadi berhasil diperbarui.'
+            );
+    }
+
+    /**
+     * Mengganti kata sandi akun mahasiswa yang sedang login.
+     */
+    public function updatePassword(
+        PortalKataSandiMahasiswaRequest $request,
+        PerbaruiKataSandiMahasiswa $perbaruiKataSandi
+    ): RedirectResponse {
+        $user = $request->user();
+
+        abort_unless(
+            $user !== null,
+            Response::HTTP_UNAUTHORIZED
+        );
+
+        $perbaruiKataSandi->jalankan(
+            $user,
+            $request->dataAman()
+        );
+
+        return redirect()
+            ->route('portal.profil.show')
+            ->with(
+                'info',
+                'Kata sandi berhasil diperbarui.'
             );
     }
 }

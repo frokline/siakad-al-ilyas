@@ -64,6 +64,50 @@ class PortalBiodataMahasiswaController extends Controller
         ]);
     }
 
+
+    /**
+     * Menampilkan biodata mahasiswa dalam format siap cetak.
+     */
+    public function cetak(Request $request): View
+    {
+        $user = $request->user();
+
+        abort_unless($user !== null, 401);
+
+        // Ambil hanya data mahasiswa yang terhubung ke akun login.
+        $mahasiswa = Mahasiswa::query()
+            ->where('user_id', $user->id)
+            ->with([
+                'biodata',
+                'alamatBiodata',
+                'pendidikanAsal',
+                'dataKeluarga',
+                'berkasBiodata.berkas',
+            ])
+            ->firstOrFail();
+
+        $riwayatAktif = $mahasiswa->riwayatStudi()
+            ->where('status', RiwayatStudi::AKTIF)
+            ->with([
+                'kurikulum.programStudi',
+                'periodeMulai',
+                'registrasiSemester.rombel',
+            ])
+            ->first();
+
+        return view('portal.biodata.cetak', [
+            'user' => $user,
+            'mahasiswa' => $mahasiswa,
+            'biodata' => $mahasiswa->biodata,
+            'alamatBiodata' => $mahasiswa->alamatBiodata,
+            'pendidikanAsal' => $mahasiswa->pendidikanAsal,
+            'dataKeluarga' => $mahasiswa->dataKeluarga,
+            'berkasBiodata' => $mahasiswa->berkasBiodata,
+            'riwayatAktif' => $riwayatAktif,
+        ]);
+    }
+
+
     public function edit(Request $request): View
     {
         $user = $request->user();

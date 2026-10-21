@@ -11,6 +11,7 @@ use App\Models\Mahasiswa;
 use App\Models\MahasiswaBiodataBerkas;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\PenyimpananBerkas;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\RedirectResponse;
@@ -18,10 +19,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MahasiswaController extends Controller
 {
@@ -226,6 +229,50 @@ class MahasiswaController extends Controller
 
         return to_route('admin.mahasiswa.show', $hasil)
             ->with('success', 'Data mahasiswa berhasil diperbarui.');
+    }
+
+    public function lihatBerkas(
+        Mahasiswa $mahasiswa,
+        int $berkas,
+        PenyimpananBerkas $penyimpanan
+    ): StreamedResponse {
+        Gate::authorize('kelola-mahasiswa');
+
+        $tautan = $mahasiswa->berkasBiodata()
+            ->where('berkas_id', $berkas)
+            ->with('berkas')
+            ->firstOrFail();
+
+        $file = $tautan->berkas;
+        abort_if($file === null || $file->status !== Berkas::TERSEDIA, 404);
+
+        try {
+            $stream = $penyimpanan->buka($file);
+        } catch (\Throwable $e) {
+            Log::warning('Pratinjau berkas mahasiswa gagal.', [
+                'mahasiswa_id' => $mahasiswa->id,
+                'berkas_id' => $file->id,
+                'jenis' => $e::class,
+            ]);
+            abort(503, 'Berkas belum dapat ditampilkan. Coba lagi atau hubungi pengelola.');
+        }
+
+        $nama = Str::slug(mb_substr($file->label, 0, 100)) ?: 'berkas-' . $file->id;
+        $namaFile = $nama . '.' . $file->ekstensi;
+
+        return response()->stream(function () use ($stream): void {
+            try {
+                fpassthru($stream);
+            } finally {
+                fclose($stream);
+            }
+        }, 200, [
+            'Content-Type' => $file->mime_type,
+            'Content-Disposition' => 'inline; filename="' . $namaFile . '"',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
+            'Content-Length' => (string) $file->ukuran_byte,
+        ]);
     }
 
     private function akunTersedia(): Builder
