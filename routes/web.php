@@ -537,6 +537,10 @@ Route::prefix('presensi')->name('presensi.')
 
                 Route::middleware('throttle:presensi-tulis')->group(function (): void {
                     Route::post('/{pertemuan}/siapkan', 'siapkan')->name('siapkan');
+
+                    // TAMBAHAN: menyimpan perubahan presensi banyak mahasiswa sekaligus
+                    Route::post('/{pertemuan}/batch-catat', 'batchCatat')->name('batch-catat');
+
                     Route::patch('/{pertemuan}/peserta/{presensi}', 'catat')->name('catat');
                     Route::patch('/{pertemuan}/peserta/{presensi}/koreksi', 'koreksi')->name('koreksi');
                     Route::post('/{pertemuan}/tutup', 'tutup')->name('tutup');

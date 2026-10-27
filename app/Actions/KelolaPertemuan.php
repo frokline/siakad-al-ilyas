@@ -42,8 +42,13 @@ final class KelolaPertemuan
                 $pelaku = User::query()->whereKey($pelakuId)->lockForUpdate()->firstOrFail();
                 $role = $pelaku->roles()->where('roles.kode', Role::ADMIN_AKADEMIK)
                     ->lockForUpdate()->first(['roles.id']);
-                abort_unless($pelaku->isAktif() && $role !== null, 403);
-                Gate::forUser($pelaku)->authorize('kelola-pertemuan');
+                // Admin akademik mengelola rencana; dosen hanya menjalankan sesi yang menjadi tanggung jawabnya.
+                $administrasi = $role !== null;
+                $runtime = in_array($aksi, ['mulai', 'selesai'], true);
+                abort_unless($pelaku->isAktif() && ($administrasi || $runtime), 403);
+                if ($administrasi) {
+                    Gate::forUser($pelaku)->authorize('kelola-pertemuan');
+                }
 
                 $kurikulum = Kurikulum::query()->whereKey($petunjuk->rombel->paketSemester->kurikulum_id)
                     ->lockForUpdate()->firstOrFail();
@@ -93,6 +98,10 @@ final class KelolaPertemuan
                     }
                 }
                 $sesi->setRelation('kelasKuliah', $kelas);
+                if (! $administrasi) {
+                    // Dosen hanya boleh menjalankan pertemuan yang menjadi tanggung jawabnya.
+                    Gate::forUser($pelaku)->authorize('jalankan-pertemuan-presensi', $sesi);
+                }
                 $sebelum = $baru ? null : $sesi->ringkasanAudit();
                 $editRencana = in_array($aksi, ['buat', 'ubah'], true);
                 $butuhLayak = in_array($aksi, ['buat', 'ubah', 'pulihkan', 'mulai'], true);

@@ -12,11 +12,13 @@ use App\Models\Presensi;
 use App\Models\PresensiPertemuan;
 use App\Services\AksesPresensi;
 use App\Support\TokenPresensi;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class PresensiController extends Controller
@@ -133,6 +135,63 @@ class PresensiController extends Controller
             'status' => $request->validated('filter_status')
         ])
             ->withFragment('peserta-' . $presensi->id)->with('success', 'Presensi tersimpan.');
+    }
+    /**
+     * Menerima beberapa perubahan presensi dari frontend dalam satu request.
+     * Validasi akses tetap dilakukan oleh PresensiRequest, sedangkan aturan
+     * tiap item divalidasi di sini sebelum diteruskan ke action batch.
+     */
+    public function batchCatat(PresensiRequest $request, Pertemuan $pertemuan): JsonResponse
+    {
+        $data = $request->validate([
+            'items' => ['required', 'array', 'min:1', 'max:50'],
+            'items.*' => ['required', 'array:id,status,catatan,versi_presensi'],
+            'items.*.id' => ['required', 'integer', 'min:1', 'distinct'],
+            'items.*.status' => ['required', 'string', Rule::in(array_keys(Presensi::PILIHAN))],
+            'items.*.catatan' => ['nullable', 'string', 'max:1000'],
+            'items.*.versi_presensi' => [
+                'required',
+                'string',
+                'size:64',
+                'regex:/\A[a-f0-9]{64}\z/',
+            ],
+        ]);
+
+        try {
+            // Keanggotaan tiap ID diverifikasi ulang di KelolaPresensi saat row-lock,
+            // dengan scope presensi_pertemuan_id + kelas_kuliah_id. Jangan percaya ID dari browser.
+            $hasil = $this->aksi->catatBatch(
+                $request->user()->id,
+                $pertemuan,
+                $data['items']
+            );
+        } catch (ValidationException $exception) {
+            $errors = $exception->errors();
+            $errorKey = (string) (array_key_first($errors) ?? '');
+            $code = match ($errorKey) {
+                'list_not_found' => 'list_not_found',
+                'meeting_inactive' => 'meeting_inactive',
+                'presensi_closed' => 'presensi_closed',
+                default => null,
+            };
+
+            if ($code === null) {
+                throw $exception;
+            }
+
+            $message = collect($errors)->flatten()->first();
+
+            return response()->json([
+                'code' => $code,
+                'needs_refresh' => true,
+                'message' => is_string($message) && $message !== ''
+                    ? $message
+                    : 'Kondisi presensi berubah. Muat ulang data terbaru.',
+                'errors' => $errors,
+            ], 409);
+        }
+
+        return response()->json($hasil);
     }
     public function tutup(PresensiRequest $request, Pertemuan $pertemuan): RedirectResponse
     {

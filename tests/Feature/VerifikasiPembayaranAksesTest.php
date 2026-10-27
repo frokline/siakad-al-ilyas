@@ -215,6 +215,68 @@ class VerifikasiPembayaranAksesTest extends PembayaranDatabaseTestCase
         );
     }
 
+
+    public function test_role_admin_keuangan_dicabut_sebelum_verifikasi_ditolak(): void
+    {
+        $pembayaran = $this->ajukan($this->tagihanTerbit());
+        $input = $this->dataVerifikasi($pembayaran);
+
+        // Simulasikan role petugas dicabut setelah formulir dibuka.
+        DB::table('user_roles')
+            ->where('user_id', 1)
+            ->delete();
+
+        try {
+            app(ProsesVerifikasiPembayaran::class)->terima(
+                1,
+                $pembayaran,
+                $input
+            );
+
+            $this->fail('Petugas yang kehilangan role harus ditolak.');
+        } catch (HttpException $exception) {
+            $this->assertSame(403, $exception->getStatusCode());
+        }
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $pembayaran->fresh()->status
+        );
+
+        $this->assertSame(0, VerifikasiPembayaran::query()->count());
+    }
+
+    public function test_akun_admin_keuangan_nonaktif_tidak_dapat_verifikasi(): void
+    {
+        $pembayaran = $this->ajukan($this->tagihanTerbit());
+        $input = $this->dataVerifikasi($pembayaran);
+
+        // Simulasikan akun dinonaktifkan setelah formulir dibuka.
+        DB::table('users')
+            ->where('id', 1)
+            ->update(['status' => 'nonaktif']);
+
+        try {
+            app(ProsesVerifikasiPembayaran::class)->terima(
+                1,
+                $pembayaran,
+                $input
+            );
+
+            $this->fail('Akun nonaktif harus ditolak.');
+        } catch (HttpException $exception) {
+            $this->assertSame(403, $exception->getStatusCode());
+        }
+
+        $this->assertSame(
+            Pembayaran::MENUNGGU,
+            $pembayaran->fresh()->status
+        );
+
+        $this->assertSame(0, VerifikasiPembayaran::query()->count());
+    }
+
+
     public function test_http_admin_keuangan_dapat_memverifikasi(): void
     {
         $pembayaran = $this->ajukan(

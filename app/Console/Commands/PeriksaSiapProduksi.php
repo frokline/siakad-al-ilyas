@@ -7,6 +7,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\Process\Process;
 use Throwable;
 
 class PeriksaSiapProduksi extends Command
@@ -35,7 +36,7 @@ class PeriksaSiapProduksi extends Command
 
         $this->newLine();
         $this->components->twoColumnDetail(
-            'Hasil: '.$this->lulus.' lulus, '.$this->peringatan.' peringatan, '.$this->gagal.' gagal',
+            'Hasil: ' . $this->lulus . ' lulus, ' . $this->peringatan . ' peringatan, ' . $this->gagal . ' gagal',
             $this->gagal > 0
                 ? '<fg=red;options=bold>TIDAK SIAP</>'
                 : ($this->peringatan > 0
@@ -69,7 +70,7 @@ class PeriksaSiapProduksi extends Command
         $this->catat(
             'APP_ENV',
             $environment === 'production' ? 'LULUS' : 'GAGAL',
-            $environment.($environment === 'production' ? '' : ' (harus production)'),
+            $environment . ($environment === 'production' ? '' : ' (harus production)'),
         );
 
         $debug = (bool) config('app.debug');
@@ -96,17 +97,17 @@ class PeriksaSiapProduksi extends Command
             $tanpaDomain ? 'GAGAL' : (str_starts_with($url, 'http://') ? 'PERINGATAN' : 'LULUS'),
             $url === ''
                 ? 'kosong'
-                : $url.($tanpaDomain
+                : $url . ($tanpaDomain
                     ? ' (tautan unduh bermeterai tidak valid)'
                     : (str_starts_with($url, 'http://') ? ' (memakai http://; pakai https)' : '')),
         );
 
         $kanalLog = (string) config('logging.default', 'stack');
-        $logLevel = (string) config('logging.channels.'.$kanalLog.'.level', 'debug');
+        $logLevel = (string) config('logging.channels.' . $kanalLog . '.level', 'debug');
         $this->catat(
             'LOG_LEVEL',
             in_array($logLevel, ['debug', 'info'], true) ? 'PERINGATAN' : 'LULUS',
-            $logLevel.($logLevel === 'debug' ? ' (terlalu ramai untuk produksi)' : ''),
+            $logLevel . ($logLevel === 'debug' ? ' (terlalu ramai untuk produksi)' : ''),
         );
 
         $secure = config('session.secure');
@@ -124,14 +125,41 @@ class PeriksaSiapProduksi extends Command
         $this->catat(
             'Pengaturan mail',
             $mailKurang ? 'PERINGATAN' : 'LULUS',
-            $mailer.' / '.$alamatMail.($mailKurang ? ' (email tidak benar-benar terkirim)' : ''),
+            $mailer . ' / ' . $alamatMail . ($mailKurang ? ' (email tidak benar-benar terkirim)' : ''),
         );
 
-        $scanner = (string) config('berkas.scanner', 'none');
+        $scanner = trim((string) config('berkas.scanner', 'none'));
+        $scannerBin = trim((string) config('berkas.clamscan', 'clamscan'));
+
+        $scannerSiap = false;
+        $pesanScanner = '';
+
+        if ($scanner !== 'clamav') {
+            $pesanScanner = $scanner === '' || $scanner === 'none'
+                ? 'ClamAV wajib diaktifkan untuk produksi.'
+                : 'Nilai scanner tidak didukung. Gunakan clamav.';
+        } elseif ($scannerBin === '') {
+            $pesanScanner = 'Lokasi executable ClamAV belum dikonfigurasi.';
+        } else {
+            try {
+                $process = new Process([$scannerBin, '--version']);
+                $process->setTimeout(10);
+                $process->run();
+
+                $scannerSiap = $process->isSuccessful();
+
+                $pesanScanner = $scannerSiap
+                    ? 'ClamAV tersedia dan dapat dijalankan.'
+                    : 'Executable ClamAV gagal dijalankan.';
+            } catch (Throwable) {
+                $pesanScanner = 'ClamAV tidak tersedia atau gagal dijalankan.';
+            }
+        }
+
         $this->catat(
             'Pemindai berkas',
-            $scanner === 'none' || $scanner === '' ? 'PERINGATAN' : 'LULUS',
-            $scanner === '' ? 'none' : $scanner,
+            $scannerSiap ? 'LULUS' : 'GAGAL',
+            $pesanScanner,
         );
     }
 
@@ -163,7 +191,7 @@ class PeriksaSiapProduksi extends Command
         }
 
         $berkas = array_map(
-            static fn (string $path): string => basename($path, '.php'),
+            static fn(string $path): string => basename($path, '.php'),
             glob(database_path('migrations/*.php')) ?: [],
         );
 
@@ -174,17 +202,17 @@ class PeriksaSiapProduksi extends Command
             'Migration',
             $tertunda === [] ? 'LULUS' : 'GAGAL',
             $tertunda === []
-                ? count($berkas).' migration sudah berjalan'
-                : count($tertunda).' belum berjalan: '.implode(', ', $tertunda),
+                ? count($berkas) . ' migration sudah berjalan'
+                : count($tertunda) . ' belum berjalan: ' . implode(', ', $tertunda),
         );
     }
 
     private function periksaTabelPendukung(): void
     {
         $tabel = [
-            'Queue '.config('queue.default') => config('queue.default') === 'database' ? 'jobs' : null,
-            'Session '.config('session.driver') => config('session.driver') === 'database' ? 'sessions' : null,
-            'Cache '.config('cache.default') => config('cache.default') === 'database' ? 'cache' : null,
+            'Queue ' . config('queue.default') => config('queue.default') === 'database' ? 'jobs' : null,
+            'Session ' . config('session.driver') => config('session.driver') === 'database' ? 'sessions' : null,
+            'Cache ' . config('cache.default') => config('cache.default') === 'database' ? 'cache' : null,
         ];
 
         foreach ($tabel as $nama => $isi) {
@@ -199,7 +227,7 @@ class PeriksaSiapProduksi extends Command
             $this->catat(
                 $nama,
                 $ada ? 'LULUS' : 'GAGAL',
-                $ada ? 'tabel '.$isi.' tersedia' : 'tabel '.$isi.' belum ada; jalankan php artisan migrate',
+                $ada ? 'tabel ' . $isi . ' tersedia' : 'tabel ' . $isi . ' belum ada; jalankan php artisan migrate',
             );
         }
     }
@@ -229,7 +257,7 @@ class PeriksaSiapProduksi extends Command
             $ditemukan === [] ? 'LULUS' : 'GAGAL',
             $ditemukan === []
                 ? 'tidak ada kredensial publik di database'
-                : 'masih memakai kata sandi demo: '.implode(', ', $ditemukan),
+                : 'masih memakai kata sandi demo: ' . implode(', ', $ditemukan),
         );
     }
 
@@ -248,8 +276,8 @@ class PeriksaSiapProduksi extends Command
         };
 
         $this->components->twoColumnDetail(
-            $nama.' <fg=gray>'.$pesan.'</>',
-            '<fg='.$warna.';options=bold>'.$status.'</>',
+            $nama . ' <fg=gray>' . $pesan . '</>',
+            '<fg=' . $warna . ';options=bold>' . $status . '</>',
         );
     }
 }

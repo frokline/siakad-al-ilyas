@@ -256,8 +256,78 @@
                 </form>
             </div>
 
+            @if ($bolehCatat && $daftar->status === \App\Models\PresensiPertemuan::TERBUKA)
+                <div id="presensi-batch-panel" hidden data-endpoint="{{ route('presensi.batch-catat', $sesi) }}"
+                    data-csrf="{{ csrf_token() }}"
+                    class="mx-4 mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:mx-6">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <p class="font-semibold text-emerald-950">Pencatatan presensi bertahap</p>
+                            <p id="presensi-batch-count" class="mt-1 text-sm text-emerald-800" aria-live="polite">
+                                Belum ada perubahan yang dipilih.
+                            </p>
+                        </div>
+                        <button id="presensi-batch-send" type="button" disabled
+                            class="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50">
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                                stroke-width="2" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                            </svg>
+                            <span id="presensi-batch-send-label">Kirim Semua</span>
+                        </button>
+                    </div>
+                    <section id="presensi-batch-result" hidden
+                        class="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5" role="status"
+                        aria-live="polite" aria-atomic="true">
+                        <div class="flex items-start gap-3">
+                            <div id="presensi-batch-result-icon"
+                                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-lg font-bold text-slate-700"
+                                aria-hidden="true">i</div>
+                            <div class="min-w-0 flex-1">
+                                <h3 id="presensi-batch-result-title" class="font-bold text-slate-900">Ringkasan pengiriman
+                                </h3>
+                                <p id="presensi-batch-message" class="mt-1 text-sm leading-6 text-slate-600"></p>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                                <p id="presensi-batch-saved-count"
+                                    class="text-2xl font-bold tabular-nums text-emerald-800">0</p>
+                                <p class="mt-0.5 text-xs font-semibold text-emerald-900">Berhasil disimpan</p>
+                            </div>
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                                <p id="presensi-batch-unchanged-count"
+                                    class="text-2xl font-bold tabular-nums text-slate-700">0</p>
+                                <p class="mt-0.5 text-xs font-semibold text-slate-700">Sudah sesuai</p>
+                            </div>
+                            <div class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3">
+                                <p id="presensi-batch-failed-count" class="text-2xl font-bold tabular-nums text-rose-800">
+                                    0</p>
+                                <p class="mt-0.5 text-xs font-semibold text-rose-900">Perlu diperiksa</p>
+                            </div>
+                        </div>
+
+                        <details id="presensi-batch-errors-wrap" hidden
+                            class="mt-4 rounded-xl border border-rose-200 bg-rose-50/60 p-3">
+                            <summary class="cursor-pointer text-sm font-semibold text-rose-900">Lihat peserta yang belum
+                                berhasil dan alasannya</summary>
+                            <ul id="presensi-batch-errors" class="mt-3 space-y-2 text-sm text-rose-900"></ul>
+                        </details>
+
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <button id="presensi-batch-reload" type="button" hidden
+                                class="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                                Muat ulang data terbaru
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            @endif
+
             <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm text-slate-600 border-collapse">
+
                     <thead class="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
                         <tr>
                             <th scope="col" class="px-6 py-4 font-semibold w-1/4">Mahasiswa</th>
@@ -276,11 +346,16 @@
                                         class="text-xs text-slate-500 font-mono mt-0.5 block">{{ $row->peserta_snapshot['nim'] ?? 'NIM tidak tersedia' }}</span>
                                 </td>
                                 <td class="px-6 py-4">
-                                    <span
+                                    <span data-presensi-status
                                         class="inline-flex items-center rounded border px-2 py-1 text-xs font-bold uppercase tracking-wider mb-1 {{ $warnaStatus[$row->status] ?? 'bg-slate-100 text-slate-600 border-slate-200' }}">
                                         {{ $row->labelStatus() }}
                                     </span>
-                                    <span
+                                    <span data-draft-indicator hidden
+                                        class="mt-1 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                        Draft belum dikirim
+                                    </span>
+                                    <p data-row-batch-error hidden class="mt-1 text-xs font-medium text-rose-700"></p>
+                                    <span data-presensi-note
                                         class="text-xs text-slate-500 block whitespace-pre-line italic">{{ $row->catatan ?? 'Tidak ada catatan' }}</span>
                                 </td>
                                 <td class="px-6 py-4">
@@ -293,7 +368,11 @@
                                     @if ($bolehCatat && $row->status === \App\Models\Presensi::BELUM)
                                         <form
                                             action="{{ route('presensi.catat', ['pertemuan' => $sesi, 'presensi' => $row]) }}"
-                                            method="post" class="flex flex-col gap-2">
+                                            method="post" data-presensi-row data-row-id="{{ $row->id }}"
+                                            data-row-name="{{ $row->peserta_snapshot['nama'] ?? 'Peserta' }}"
+                                            data-initial-status="{{ $row->status }}"
+                                            data-initial-status-label="{{ $row->labelStatus() }}"
+                                            class="js-presensi-row-form flex flex-col gap-2">
                                             @csrf @method('PATCH')
                                             <input type="hidden" name="form_presensi"
                                                 value="baris-{{ $row->id }}">
@@ -332,7 +411,22 @@
                                                     </button>
                                                 @endforeach
                                             </div>
+                                            <button type="button" data-discard-draft hidden
+                                                class="inline-flex items-center justify-center rounded border border-slate-300 bg-white px-2 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">
+                                                Batalkan pilihan
+                                            </button>
                                         </form>
+                                        <span data-saved-indicator hidden
+                                            class="inline-flex items-center justify-center rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-800">
+                                            Tersimpan
+                                        </span>
+                                        @if ($bolehKoreksi)
+                                            <a data-correction-link hidden
+                                                href="{{ route('presensi.edit', ['pertemuan' => $sesi, 'presensi' => $row]) }}"
+                                                class="mt-2 inline-flex w-full items-center justify-center rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-siakad-dark transition-colors">
+                                                Koreksi Status
+                                            </a>
+                                        @endif
                                     @elseif($bolehKoreksi && $row->status !== \App\Models\Presensi::BELUM)
                                         <a href="{{ route('presensi.edit', ['pertemuan' => $sesi, 'presensi' => $row]) }}"
                                             class="inline-flex w-full items-center justify-center rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-siakad-dark transition-colors mb-2 shadow-sm">
@@ -377,7 +471,7 @@
                         </div>
                     @else
                         <p class="text-sm text-amber-700 mb-4">Pastikan data seluruh peserta valid sebelum ditutup.</p>
-                        <form action="{{ route('presensi.tutup', $sesi) }}" method="post">
+                        <form id="form-tutup-presensi" action="{{ route('presensi.tutup', $sesi) }}" method="post">
                             @csrf
                             <input type="hidden" name="form_presensi" value="tutup">
                             <input type="hidden" name="versi_daftar"
@@ -445,4 +539,459 @@
             @endif
         </div>
     @endif
+
+    @if ($bolehCatat && $daftar !== null && $daftar->status === \App\Models\PresensiPertemuan::TERBUKA)
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const panel = document.getElementById('presensi-batch-panel');
+                if (!panel) return;
+
+                const sendButton = document.getElementById('presensi-batch-send');
+                const sendLabel = document.getElementById('presensi-batch-send-label');
+                const countLabel = document.getElementById('presensi-batch-count');
+                const resultPanel = document.getElementById('presensi-batch-result');
+                const resultIcon = document.getElementById('presensi-batch-result-icon');
+                const resultTitle = document.getElementById('presensi-batch-result-title');
+                const messageBox = document.getElementById('presensi-batch-message');
+                const savedCount = document.getElementById('presensi-batch-saved-count');
+                const unchangedCount = document.getElementById('presensi-batch-unchanged-count');
+                const failedCount = document.getElementById('presensi-batch-failed-count');
+                const errorWrap = document.getElementById('presensi-batch-errors-wrap');
+                const errorList = document.getElementById('presensi-batch-errors');
+                const reloadButton = document.getElementById('presensi-batch-reload');
+                const forms = Array.from(document.querySelectorAll('form[data-presensi-row]'));
+                const formById = new Map(forms.map(form => [String(form.dataset.rowId), form]));
+                const drafts = new Map();
+                const processed = new Set();
+                let isSending = false;
+                let mustReload = false;
+                let allowUnload = false;
+
+                const labels = {
+                    hadir: 'Hadir',
+                    izin: 'Izin',
+                    sakit: 'Sakit',
+                    alpa: 'Alpa'
+                };
+                const statusStyles = {
+                    hadir: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                    izin: 'bg-blue-50 text-blue-700 border-blue-200',
+                    sakit: 'bg-amber-50 text-amber-700 border-amber-200',
+                    alpa: 'bg-rose-50 text-rose-700 border-rose-200'
+                };
+                const initialStatusStyle = 'bg-slate-100 text-slate-600 border-slate-200';
+                const baseBadgeClass =
+                    'inline-flex items-center rounded border px-2 py-1 text-xs font-bold uppercase tracking-wider mb-1';
+
+                panel.hidden = false;
+                reloadButton.addEventListener('click', () => {
+                    // Reload ini memang disengaja; jangan munculkan prompt beforeunload untuk draft stale.
+                    allowUnload = true;
+                    window.location.reload();
+                });
+
+                function showMessage(text, type, counts = {}) {
+                    resultPanel.hidden = false;
+                    messageBox.textContent = text;
+                    resultPanel.className = 'mt-4 rounded-2xl border bg-white p-4 shadow-sm sm:p-5';
+                    resultIcon.className =
+                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-lg font-bold';
+
+                    if (type === 'success') {
+                        resultPanel.classList.add('border-emerald-200');
+                        resultIcon.classList.add('bg-emerald-100', 'text-emerald-800');
+                        resultIcon.textContent = '✓';
+                        resultTitle.textContent = 'Presensi berhasil diproses';
+                        messageBox.className = 'mt-1 text-sm leading-6 text-emerald-900';
+                    } else if (type === 'error') {
+                        resultPanel.classList.add('border-rose-200');
+                        resultIcon.classList.add('bg-rose-100', 'text-rose-800');
+                        resultIcon.textContent = '!';
+                        resultTitle.textContent = 'Sebagian perubahan perlu diperiksa';
+                        messageBox.className = 'mt-1 text-sm leading-6 text-rose-900';
+                    } else {
+                        resultPanel.classList.add('border-amber-200');
+                        resultIcon.classList.add('bg-amber-100', 'text-amber-800');
+                        resultIcon.textContent = 'i';
+                        resultTitle.textContent = 'Perhatian';
+                        messageBox.className = 'mt-1 text-sm leading-6 text-amber-900';
+                    }
+
+                    if (counts.saved !== undefined) savedCount.textContent = String(counts.saved);
+                    if (counts.unchanged !== undefined) unchangedCount.textContent = String(counts.unchanged);
+                    if (counts.failed !== undefined) failedCount.textContent = String(counts.failed);
+                }
+
+                function setRowError(form, text) {
+                    const row = form.closest('tr');
+                    const error = row?.querySelector('[data-row-batch-error]');
+                    if (!error) return;
+                    error.textContent = text;
+                    error.hidden = !text;
+                }
+
+                function updateRow(form, draft) {
+                    const row = form.closest('tr');
+                    if (!row) return;
+                    if (form.hidden) return;
+                    if (processed.has(String(form.dataset.rowId))) return;
+                    const badge = row.querySelector('[data-presensi-status]');
+                    const draftIndicator = row.querySelector('[data-draft-indicator]');
+                    const note = row.querySelector('[data-presensi-note]');
+                    const discard = form.querySelector('[data-discard-draft]');
+                    const buttons = Array.from(form.querySelectorAll('button[type="submit"][name="status"]'));
+
+                    if (badge) {
+                        if (!form.dataset.originalBadgeClass) form.dataset.originalBadgeClass = badge.className;
+                        if (draft) {
+                            badge.className = baseBadgeClass + ' ' + (statusStyles[draft.status] || initialStatusStyle);
+                            badge.textContent = labels[draft.status] || draft.status;
+                        } else {
+                            badge.className = form.dataset.originalBadgeClass;
+                            badge.textContent = form.dataset.initialStatusLabel || 'Belum dicatat';
+                        }
+                    }
+                    if (draftIndicator) {
+                        draftIndicator.hidden = !draft;
+                        draftIndicator.textContent = 'Belum dikirim';
+                        draftIndicator.className =
+                            'mt-1 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800';
+                        draftIndicator.removeAttribute('data-draft');
+                    }
+                    if (note) {
+                        note.textContent = draft?.catatan || 'Tidak ada catatan';
+                    }
+                    if (discard) discard.hidden = !draft;
+
+                    buttons.forEach(button => {
+                        const selected = Boolean(draft && button.value === draft.status);
+                        button.classList.toggle('ring-2', selected);
+                        button.classList.toggle('ring-offset-1', selected);
+                        button.classList.toggle('ring-slate-800', selected);
+                        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+                    });
+                    setRowError(form, '');
+                }
+
+                function renderPanel() {
+                    const count = drafts.size;
+                    countLabel.textContent = count === 0 ?
+                        'Belum ada perubahan yang dipilih.' :
+                        count + ' perubahan belum dikirim ke database.';
+                    sendButton.disabled = isSending || mustReload || count === 0;
+                    sendLabel.textContent = isSending ? 'Mengirim…' : 'Kirim Semua (' + count + ')';
+                }
+
+                function setFormBusy(form, busy) {
+                    form.querySelectorAll('button[type="submit"], [data-discard-draft], input[name="catatan"]').forEach(
+                        control => {
+                            control.disabled = busy || mustReload;
+                        });
+                }
+
+                forms.forEach(form => {
+                    const noteInput = form.querySelector('input[name="catatan"]');
+                    const discardButton = form.querySelector('[data-discard-draft]');
+
+                    form.querySelectorAll('button[type="submit"][name="status"]').forEach(button => {
+                        button.setAttribute('aria-pressed', 'false');
+                    });
+
+                    form.addEventListener('submit', function(event) {
+                        // Dengan JavaScript aktif, klik status hanya membuat/mengubah draft.
+                        // Tanpa JavaScript, form lama tetap dapat dikirim langsung sebagai fallback.
+                        event.preventDefault();
+                        if (isSending || mustReload) return;
+                        const trigger = event.submitter;
+                        if (!trigger || !trigger.name || trigger.name !== 'status') return;
+
+                        const id = String(form.dataset.rowId);
+                        const version = form.querySelector('input[name="versi_presensi"]')?.value;
+                        if (!version) {
+                            showMessage(
+                                'Token versi tidak ditemukan untuk salah satu peserta. Muat ulang halaman.',
+                                'error');
+                            mustReload = true;
+                            renderPanel();
+                            reloadButton.hidden = false;
+                            return;
+                        }
+
+                        const draft = {
+                            id: Number(id),
+                            status: trigger.value,
+                            catatan: noteInput?.value.trim() || null,
+                            versi_presensi: version,
+                            nama: form.dataset.rowName || 'Peserta'
+                        };
+                        drafts.set(id, draft);
+                        updateRow(form, draft);
+                        renderPanel();
+                    });
+
+                    noteInput?.addEventListener('input', function() {
+                        const draft = drafts.get(String(form.dataset.rowId));
+                        if (!draft || isSending || mustReload) return;
+                        draft.catatan = noteInput.value.trim() || null;
+                        drafts.set(String(form.dataset.rowId), draft);
+                        updateRow(form, draft);
+                    });
+
+                    discardButton?.addEventListener('click', function() {
+                        if (isSending || mustReload) return;
+                        drafts.delete(String(form.dataset.rowId));
+                        updateRow(form, null);
+                        renderPanel();
+                    });
+                });
+
+                const closeForm = document.getElementById('form-tutup-presensi');
+                closeForm?.addEventListener('submit', function(event) {
+                    if (drafts.size > 0) {
+                        event.preventDefault();
+                        showMessage('Masih ada ' + drafts.size +
+                            ' perubahan yang belum dikirim. Kirim atau batalkan draft sebelum menutup presensi.',
+                            'error');
+                        panel.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'center'
+                        });
+                    }
+                });
+
+                window.addEventListener('beforeunload', function(event) {
+                    if (drafts.size > 0 && !isSending && !allowUnload) {
+                        event.preventDefault();
+                        event.returnValue = '';
+                    }
+                });
+
+                sendButton.addEventListener('click', async function() {
+                    if (drafts.size === 0 || isSending || mustReload) return;
+
+                    isSending = true;
+                    resultPanel.hidden = true;
+                    errorWrap.hidden = true;
+                    errorList.replaceChildren();
+                    reloadButton.hidden = true;
+                    forms.forEach(form => setFormBusy(form, true));
+                    renderPanel();
+
+                    const sentDrafts = new Map(Array.from(drafts.entries()).map(([id, draft]) => [id, {
+                        ...draft
+                    }]));
+                    const items = Array.from(sentDrafts.values()).map(({
+                        id,
+                        status,
+                        catatan,
+                        versi_presensi
+                    }) => ({
+                        id,
+                        status,
+                        catatan,
+                        versi_presensi
+                    }));
+
+                    try {
+                        const response = await fetch(panel.dataset.endpoint, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {
+                                'Accept': 'application/json',
+                                'Content-Type': 'application/json',
+                                'X-CSRF-TOKEN': panel.dataset.csrf,
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            body: JSON.stringify({
+                                items
+                            })
+                        });
+
+                        const payload = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            if (payload.needs_refresh === true) {
+                                mustReload = true;
+                                reloadButton.hidden = false;
+                            }
+                            const validationMessages = payload.errors ?
+                                Object.values(payload.errors).flat().join(' ') :
+                                '';
+                            const requestError = new Error(validationMessages || payload.message ||
+                                'Pengiriman gagal. Draft tetap tersedia di halaman ini.');
+                            requestError.needsRefresh = payload.needs_refresh === true;
+                            throw requestError;
+                        }
+
+                        const results = Array.isArray(payload.results) ? payload.results : [];
+                        // Validasi kontrak dilakukan sebelum menyentuh draft/DOM. Kalau respons parsial
+                        // atau rusak, catch akan memulihkan seluruh draft dan retry aman untuk baris identik.
+                        const resultIds = results.map(item => String(item?.id ?? ''));
+                        const resultIdSet = new Set(resultIds);
+                        const validResponse = results.length === sentDrafts.size &&
+                            resultIdSet.size === results.length &&
+                            resultIds.every(id => sentDrafts.has(id)) &&
+                            results.every(item => typeof item?.success === 'boolean');
+                        if (!validResponse) {
+                            throw new Error(
+                                'Rincian hasil dari server tidak lengkap atau tidak valid. Draft dipertahankan; muat ulang halaman sebelum mencoba lagi jika status database belum pasti.'
+                            );
+                        }
+
+                        // API mengembalikan `success`, `changed`, `code`, dan `needs_refresh`.
+                        const failed = results.filter(item => item.success !== true);
+                        const succeeded = results.filter(item => item.success === true);
+                        const saved = Number.isFinite(Number(payload.saved)) ?
+                            Number(payload.saved) :
+                            succeeded.filter(item => item.changed === true).length;
+                        const unchanged = Number.isFinite(Number(payload.unchanged)) ?
+                            Number(payload.unchanged) :
+                            succeeded.filter(item => item.changed !== true).length;
+
+                        // Kode stabil berasal dari backend; tidak bergantung pada teks pesan/bahasa.
+                        const needsRefresh = payload.needs_refresh === true || failed.some(item =>
+                            item.needs_refresh === true || ['stale_version', 'not_found',
+                                'already_recorded',
+                                'list_not_found', 'meeting_inactive', 'presensi_closed'
+                            ].includes(item.code)
+                        );
+                        mustReload = needsRefresh;
+
+                        results.forEach(result => {
+                            const id = String(result.id);
+                            const form = formById.get(id);
+                            if (!form) return;
+                            const row = form.closest('tr');
+                            const badge = row?.querySelector('[data-presensi-status]');
+                            const draftIndicator = row?.querySelector('[data-draft-indicator]');
+                            const note = row?.querySelector('[data-presensi-note]');
+                            const savedIndicator = row?.querySelector('[data-saved-indicator]');
+                            const sentDraft = sentDrafts.get(id);
+
+                            if (result.success === true) {
+                                processed.add(id);
+                                if (badge && sentDraft) {
+                                    badge.className = baseBadgeClass + ' ' + (statusStyles[sentDraft
+                                        .status] || initialStatusStyle);
+                                    badge.textContent = labels[sentDraft.status] || sentDraft
+                                        .status;
+                                }
+                                if (draftIndicator) {
+                                    draftIndicator.hidden = false;
+                                    if (result.changed === true) {
+                                        draftIndicator.textContent = 'Tersimpan';
+                                        draftIndicator.className =
+                                            'mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800';
+                                    } else {
+                                        draftIndicator.textContent = 'Sudah sesuai';
+                                        draftIndicator.className =
+                                            'mt-1 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700';
+                                    }
+                                    draftIndicator.removeAttribute('data-draft');
+                                }
+                                if (note && sentDraft) note.textContent = sentDraft.catatan ||
+                                    'Tidak ada catatan';
+                                form.hidden = true;
+                                if (savedIndicator) savedIndicator.hidden = false;
+                                const correctionLink = row?.querySelector('[data-correction-link]');
+                                if (correctionLink) correctionLink.hidden = false;
+                                setRowError(form, '');
+                                return;
+                            }
+
+                            // Perubahan yang gagal tetap menjadi draft agar bisa diperbaiki/dikirim ulang.
+                            if (sentDraft) drafts.set(id, sentDraft);
+                            updateRow(form, sentDraft || null);
+                            setRowError(form, result.message ||
+                                'Presensi belum berhasil disimpan.');
+                        });
+
+                        failed.forEach(item => {
+                            const id = String(item.id);
+                            const form = formById.get(id);
+                            const draft = sentDrafts.get(id);
+                            const li = document.createElement('li');
+                            li.className = 'rounded-lg border border-rose-200 bg-white px-3 py-2';
+                            const name = document.createElement('p');
+                            name.className = 'font-semibold text-rose-950';
+                            name.textContent = draft?.nama || form?.dataset.rowName || (
+                                'Peserta ID ' + id);
+                            const reason = document.createElement('p');
+                            reason.className = 'mt-0.5 text-rose-800';
+                            reason.textContent = item.message ||
+                                'Presensi belum berhasil disimpan.';
+                            li.append(name, reason);
+                            errorList.appendChild(li);
+                        });
+
+                        const counts = {
+                            saved,
+                            unchanged,
+                            failed: failed.length
+                        };
+                        if (failed.length === 0) {
+                            showMessage(
+                                unchanged > 0 ?
+                                'Semua permintaan telah diperiksa. Data yang berubah sudah disimpan; data yang sudah sesuai tidak ditulis ulang.' :
+                                'Semua perubahan berhasil disimpan ke database. Tampilan status telah diperbarui.',
+                                'success', counts
+                            );
+                        } else if (needsRefresh) {
+                            showMessage(
+                                saved + ' perubahan berhasil disimpan. ' + failed.length +
+                                ' belum berhasil karena data mungkin sudah berubah. Muat ulang daftar sebelum melanjutkan.',
+                                'error', counts
+                            );
+                            reloadButton.hidden = false;
+                        } else {
+                            showMessage(
+                                saved + ' berhasil disimpan, ' + unchanged + ' sudah sesuai, dan ' +
+                                failed.length +
+                                ' perlu diperbaiki. Perubahan yang gagal tetap menjadi draft sehingga bisa dicoba kembali.',
+                                'error', counts
+                            );
+                        }
+
+                        errorWrap.hidden = failed.length === 0;
+                        reloadButton.hidden = !needsRefresh;
+
+                        // Commit draft baru setelah semua pemrosesan hasil dan DOM selesai.
+                        // Jika ada exception sebelumnya, backup di catch akan memulihkan seluruh pilihan.
+                        drafts.clear();
+                        failed.forEach(item => {
+                            const id = String(item.id);
+                            const sentDraft = sentDrafts.get(id);
+                            if (sentDraft) drafts.set(id, {
+                                ...sentDraft
+                            });
+                        });
+                    } catch (error) {
+                        // Respons/network/DOM error tidak boleh menghapus pilihan yang dibuat dosen.
+                        drafts.clear();
+                        sentDrafts.forEach((draft, id) => drafts.set(id, {
+                            ...draft
+                        }));
+                        if (error?.needsRefresh || mustReload) {
+                            mustReload = true;
+                            reloadButton.hidden = false;
+                        }
+                        showMessage(
+                            error.message ||
+                            'Terjadi kesalahan saat mengirim presensi. Draft dipulihkan di halaman ini.',
+                            'error', {
+                                saved: 0,
+                                unchanged: 0,
+                                failed: drafts.size
+                            }
+                        );
+                    } finally {
+                        isSending = false;
+                        forms.forEach(form => setFormBusy(form, false));
+                        renderPanel();
+                    }
+                });
+                renderPanel();
+            });
+        </script>
+    @endif
+
 @endsection

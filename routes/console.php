@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Artisan;
 \Illuminate\Support\Facades\Schedule::command('notifikasi:sinkronkan')
     ->everyFiveMinutes()->withoutOverlapping(60);
 
+\Illuminate\Support\Facades\Schedule::command('berkas:rekonsiliasi')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping(60);
+
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
