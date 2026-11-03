@@ -32,7 +32,7 @@
                         </span>
                     </div>
                     <div class="min-w-0">
-                        <p class="text-sm text-emerald-100">Selamat datang,</p>
+                        <p class="text-sm text-emerald-100">Selamat datang kembali,</p>
                         <h2 class="mt-0.5 break-words text-xl font-bold leading-tight sm:text-2xl">{{ $user->nama }}</h2>
                         <p class="mt-1.5 max-w-2xl text-sm leading-relaxed text-emerald-50/90">
                             Informasi studi dan layanan akademik Anda tersedia dari halaman ini.

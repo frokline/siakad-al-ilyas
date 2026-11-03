@@ -117,28 +117,30 @@
         </div>
     @endif
 
-    <div class="border-t border-slate-200 pt-6">
-        <label for="status" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Status
-            Kurikulum <span class="text-rose-500">*</span></label>
-        <select id="status" name="status" required
-            class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white @error('status') border-rose-500 bg-rose-50/50 @enderror">
-            @foreach ($statusOptions as $kodeStatus => $labelStatus)
-                <option value="{{ $kodeStatus }}" @selected($value('status', $kurikulum->status) === $kodeStatus)>
-                    {{ $labelStatus }}
-                </option>
-            @endforeach
-        </select>
+    @if ($editing)
+        <div class="border-t border-slate-200 pt-6">
+            <label for="status" class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wider">Status
+                Kurikulum <span class="text-rose-500">*</span></label>
+            <select id="status" name="status" required
+                class="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition-all focus:border-siakad-dark focus:ring-1 focus:ring-siakad-dark focus:bg-white @error('status') border-rose-500 bg-rose-50/50 @enderror">
+                @foreach ($statusOptions as $kodeStatus => $labelStatus)
+                    <option value="{{ $kodeStatus }}" @selected($value('status', $kurikulum->status) === $kodeStatus)>
+                        {{ $labelStatus }}
+                    </option>
+                @endforeach
+            </select>
 
-        @if ($editable)
-            <p class="mt-1.5 text-xs text-slate-500">Memilih Aktif atau Arsip akan mengunci identitas kurikulum. Status
-                tidak dapat dikembalikan menjadi Draf.</p>
-        @else
-            <p class="mt-1.5 text-xs text-slate-500">Kurikulum arsip dapat diaktifkan kembali jika program studi aktif.
-                Identitasnya tetap terkunci.</p>
-        @endif
+            @if ($editable)
+                <p class="mt-1.5 text-xs text-slate-500">Memilih Aktif atau Arsip akan mengunci identitas kurikulum. Status
+                    tidak dapat dikembalikan menjadi Draf.</p>
+            @else
+                <p class="mt-1.5 text-xs text-slate-500">Kurikulum arsip dapat diaktifkan kembali jika program studi aktif.
+                    Identitasnya tetap terkunci.</p>
+            @endif
 
-        @error('status')
-            <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
-        @enderror
-    </div>
+            @error('status')
+                <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
+            @enderror
+        </div>
+    @endif
 </div>

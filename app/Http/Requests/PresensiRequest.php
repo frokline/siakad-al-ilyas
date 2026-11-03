@@ -29,8 +29,16 @@ class PresensiRequest extends FormRequest
     {
         $versi = ['required', 'string', 'size:64', 'regex:/\A[a-f0-9]{64}\z/'];
         return match ($this->route()->getName()) {
-            'presensi.siapkan' => ['versi_pertemuan' => $versi, 'konfirmasi' => ['accepted']],
-            'presensi.tutup' => ['versi_daftar' => $versi, 'konfirmasi' => ['accepted']],
+            'presensi.siapkan' => [
+                'versi_pertemuan' => $versi,
+                'konfirmasi' => ['accepted'],
+                'alasan' => ['nullable', 'string', 'min:10', 'max:2000'],
+            ],
+            'presensi.tutup' => [
+                'versi_daftar' => $versi,
+                'konfirmasi' => ['accepted'],
+                'alasan' => ['nullable', 'string', 'min:10', 'max:2000'],
+            ],
             'presensi.catat', 'presensi.koreksi' => [
                 'versi_presensi' => $versi,
                 'status' => ['required', 'string', Rule::in(array_keys(Presensi::PILIHAN))],

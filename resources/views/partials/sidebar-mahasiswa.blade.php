@@ -1,5 +1,5 @@
 @php
-    $logoKampus = 'images/logo-ilyas-institut.png';
+    $logoKampus = 'images/logo-ilyas-institu.png';
     $menuAktif = 'bg-siakad-active text-white font-semibold';
     $menuBiasa = 'text-emerald-100 hover:bg-white/10 hover:text-white';
     $ikon = [

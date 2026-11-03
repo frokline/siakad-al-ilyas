@@ -8,6 +8,7 @@
     <title>@yield('title', 'Masuk Portal Akademik') | Ilyas Institut</title>
     <link rel="stylesheet" href="{{ asset('css/login.css') }}">
     <link rel="stylesheet" href="{{ asset('css/login-mobile.css') }}">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 
 <body class="login-page">
@@ -105,6 +106,17 @@
                             @checked(old('remember'))>
                         <span>Ingat saya di perangkat ini</span>
                     </label>
+                </div>
+
+                <div class="login-field">
+                    <label class="block mb-2">Verifikasi keamanan</label>
+
+                    <div class="cf-turnstile" data-sitekey="{{ config('services.turnstile.site_key') }}"
+                        data-theme="light" data-response-field-name="turnstile_token"></div>
+
+                    @error('turnstile_token')
+                        <p class="login-error" role="alert">{{ $message }}</p>
+                    @enderror
                 </div>
 
                 <button type="submit" class="login-submit">

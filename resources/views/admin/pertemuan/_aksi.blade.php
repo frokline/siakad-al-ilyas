@@ -1,12 +1,23 @@
 @php
     $zona = config('siakad.timezone', 'Asia/Makassar');
-    // Cerminan syarat "mulai" di KelolaPertemuan: kelas & periode aktif dan waktu berada dalam rentang rencana.
     $sekarang = \Carbon\CarbonImmutable::now('UTC');
+
     $kelasPeriodeAktif =
         $sesi->kelasKuliah->status === \App\Models\KelasKuliah::AKTIF &&
         $sesi->kelasKuliah->rombel->periodeAkademik->status === 'aktif';
-    $bisaMulai = $kelasPeriodeAktif && $sekarang->gte($sesi->mulai_rencana) && $sekarang->lt($sesi->selesai_rencana);
+
+    // Periksa role langsung dari database.
+    $user = auth()->user();
+
+    $administrasi = $user !== null && $user->roles()->where('roles.kode', \App\Models\Role::ADMIN_AKADEMIK)->exists();
+
+    // Dosen mengikuti rentang waktu.
+    // Admin Akademik mendapat pengecualian waktu.
+    $waktuSesuai = $sekarang->gte($sesi->mulai_rencana) && $sekarang->lt($sesi->selesai_rencana);
+
+    $bisaMulai = $kelasPeriodeAktif && ($administrasi || $waktuSesuai);
 @endphp
+
 
 <div class="space-y-6">
     @if ($sesi->status === \App\Models\Pertemuan::TERJADWAL && $sesi->konteksTerbuka())

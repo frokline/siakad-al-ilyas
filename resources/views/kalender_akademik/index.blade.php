@@ -47,18 +47,22 @@
     @include('kalender_akademik._pesan')
 
     {{-- Header halaman --}}
-    <section
-        class="relative mb-6 overflow-hidden rounded-2xl border border-emerald-900/10 bg-gradient-to-br from-emerald-950 via-emerald-900 to-teal-800 p-5 text-white shadow-lg shadow-emerald-950/10 sm:rounded-3xl sm:p-7">
 
+    <section
+        class="relative mb-6 overflow-hidden rounded-2xl border border-white/10 bg-siakad-dark p-5 text-white shadow-lg shadow-slate-900/10 sm:rounded-3xl sm:p-7">
+
+        {{-- Dekorasi lembut, tetap mengikuti warna utama --}}
         <div
-            class="pointer-events-none absolute -right-12 -top-16 h-48 w-48 rounded-full bg-emerald-300/10 blur-3xl sm:h-64 sm:w-64">
+            class="pointer-events-none absolute -right-12 -top-16 h-48 w-48 rounded-full bg-white/5 blur-3xl sm:h-64 sm:w-64">
         </div>
-        <div class="pointer-events-none absolute -bottom-16 left-1/3 h-40 w-40 rounded-full bg-teal-300/10 blur-3xl"></div>
+        <div class="pointer-events-none absolute -bottom-16 left-1/3 h-40 w-40 rounded-full bg-white/5 blur-3xl"></div>
 
         <div class="relative flex min-w-0 flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+
             <div class="min-w-0">
+
                 <div
-                    class="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-emerald-50">
+                    class="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-white">
                     <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round"
                             d="M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 012 2v13a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" />
@@ -66,16 +70,17 @@
                     Informasi Akademik
                 </div>
 
-                <h1 class="break-words text-2xl font-bold tracking-tight sm:text-3xl">
+                <h1 class="break-words text-2xl font-bold tracking-tight text-white sm:text-3xl">
                     Kalender Akademik
                 </h1>
 
-                <p class="mt-2 max-w-2xl text-sm leading-relaxed text-emerald-100/85 sm:text-base">
-                    Pantau agenda kampus, jadwal perkuliahan, pengisian KRS, ujian, dan hari libur dalam satu tempat.
+                <p class="mt-2 max-w-2xl text-sm leading-relaxed text-white/80 sm:text-base">
+                    Pantau agenda kampus, jadwal perkuliahan, pengisian KRS,
+                    ujian, dan hari libur dalam satu tempat.
                 </p>
 
                 <div
-                    class="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-xs text-emerald-50">
+                    class="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-xs text-white">
                     <span class="h-2 w-2 rounded-full bg-emerald-300"></span>
                     Zona waktu: {{ $zona }}
                 </div>
@@ -84,7 +89,7 @@
             @can('create', \App\Models\KalenderAkademik::class)
                 <div class="w-full shrink-0 sm:w-auto">
                     <a href="{{ route('kalender.create') }}"
-                        class="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-950 shadow-sm transition hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-white/80 focus:ring-offset-2 focus:ring-offset-emerald-900 active:scale-[0.99] sm:w-auto">
+                        class="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-siakad-dark shadow-sm transition hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-white/80 focus:ring-offset-2 focus:ring-offset-siakad-dark active:scale-[0.99] sm:w-auto">
 
                         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
@@ -94,8 +99,10 @@
                     </a>
                 </div>
             @endcan
+
         </div>
     </section>
+
 
     {{-- Filter agenda --}}
     <form method="get" action="{{ route('kalender.index') }}" x-data="{ lanjut: {{ $lanjutan ? 'true' : 'false' }} }"

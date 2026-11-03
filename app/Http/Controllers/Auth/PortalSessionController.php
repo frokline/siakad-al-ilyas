@@ -11,7 +11,9 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -74,6 +76,12 @@ final class PortalSessionController extends Controller
         ]);
 
         $validated = $request->validate([
+            'turnstile_token' => [
+                'bail',
+                'required',
+                'string',
+                'max:2048',
+            ],
             'login' => ['bail', 'required', 'string', 'max:190'],
             'password' => [
                 'bail',
@@ -97,6 +105,43 @@ final class PortalSessionController extends Controller
         $field = str_contains($validated['login'], '@')
             ? 'email'
             : 'username';
+        // Verifikasi Turnstile wajib dilakukan di server.
+        $secretKey = config('services.turnstile.secret_key');
+
+        if (! is_string($secretKey) || trim($secretKey) === '') {
+            throw ValidationException::withMessages([
+                'turnstile_token' =>
+                'Pemeriksaan keamanan belum dikonfigurasi. Hubungi administrator.',
+            ]);
+        }
+
+        try {
+            $hasilCaptcha = Http::asForm()
+                ->connectTimeout(3)
+                ->timeout(6)
+                ->post(
+                    'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+                    [
+                        'secret' => $secretKey,
+                        'response' => $validated['turnstile_token'],
+                    ]
+                );
+        } catch (ConnectionException $exception) {
+            throw ValidationException::withMessages([
+                'turnstile_token' =>
+                'Pemeriksaan keamanan sedang tidak tersedia. Silakan coba lagi.',
+            ]);
+        }
+
+        if (
+            ! $hasilCaptcha->successful()
+            || $hasilCaptcha->json('success') !== true
+        ) {
+            throw ValidationException::withMessages([
+                'turnstile_token' =>
+                'Verifikasi keamanan gagal atau kedaluwarsa. Silakan coba lagi.',
+            ]);
+        }
 
         /** @var SessionGuard $guard */
         $guard = Auth::guard('web');
@@ -107,7 +152,7 @@ final class PortalSessionController extends Controller
                 'password' => $validated['password'],
                 'status' => User::STATUS_AKTIF,
             ],
-            fn (Authenticatable $user): bool => $user instanceof User
+            fn(Authenticatable $user): bool => $user instanceof User
                 && $tujuan->dapatMasuk($user),
             $request->boolean('remember'),
         );
@@ -159,7 +204,7 @@ final class PortalSessionController extends Controller
             'X-Content-Type-Options' => 'nosniff',
             'X-Frame-Options' => 'DENY',
             'Referrer-Policy' => 'same-origin',
-          'Permissions-Policy' => 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+            'Permissions-Policy' => 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
         ];
     }
 }

@@ -235,8 +235,20 @@ final class KelolaPertemuan
                     if ($kelas->status !== KelasKuliah::AKTIF || $periode->status !== 'aktif') {
                         $this->gagal('pertemuan', 'Mulai memerlukan kelas dan periode aktif.');
                     }
-                    if ($waktu->lt($sesi->mulai_rencana) || ! $waktu->lt($sesi->selesai_rencana)) {
-                        $this->gagal('pertemuan', 'Mulai hanya dapat dilakukan dalam rentang waktu rencana. Perbaiki rencana bila pelaksanaan bergeser.');
+                    // Dosen wajib memulai sesi dalam rentang jadwal.
+                    // Admin Akademik boleh memulai di luar jadwal dengan tetap
+                    // melalui otorisasi server-side dan pencatatan audit.
+                    if (
+                        ! $administrasi
+                        && (
+                            $waktu->lt($sesi->mulai_rencana)
+                            || ! $waktu->lt($sesi->selesai_rencana)
+                        )
+                    ) {
+                        $this->gagal(
+                            'pertemuan',
+                            'Mulai hanya dapat dilakukan dalam rentang waktu rencana. Perbaiki rencana bila pelaksanaan bergeser.'
+                        );
                     }
                     $sesi->status = Pertemuan::BERLANGSUNG;
                     $sesi->mulai_aktual = $waktu;

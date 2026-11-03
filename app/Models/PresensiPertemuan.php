@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Support\TokenPresensi;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -12,8 +13,15 @@ use LogicException;
 
 class PresensiPertemuan extends Model
 {
+    /**
+     * Izin sementara untuk memperbarui jumlah peserta melalui
+     * method sinkronisasi historis yang khusus.
+     */
+    private static bool $izinSinkronisasiHistoris = false;
+
     public const TERBUKA = 'terbuka';
     public const DITUTUP = 'ditutup';
+
     protected $table = 'presensi_pertemuan';
     protected $guarded = ['*'];
 
@@ -51,6 +59,33 @@ class PresensiPertemuan extends Model
                 }
                 return;
             }
+            // Pengecualian terbatas untuk penambahan peserta historis.
+            // Perubahan status penutupan dan identitas daftar tetap dilarang.
+            if (self::$izinSinkronisasiHistoris) {
+                $dirty = array_keys($daftar->getDirty());
+
+                $jumlahLama = (int) $daftar->getRawOriginal('jumlah_peserta');
+                $revisiLama = (int) $daftar->getRawOriginal('revisi');
+
+                if (
+                    $daftar->getRawOriginal('status') !== self::TERBUKA
+                    || $daftar->status !== self::TERBUKA
+                    || $daftar->jumlah_peserta <= $jumlahLama
+                    || $daftar->revisi !== $revisiLama + 1
+                    || $daftar->ditutup_oleh !== null
+                    || $daftar->ditutup_at !== null
+                    || array_diff(
+                        $dirty,
+                        ['jumlah_peserta', 'revisi', 'updated_at']
+                    ) !== []
+                ) {
+                    throw new LogicException(
+                        'Sinkronisasi historis hanya boleh menambah jumlah peserta pada daftar yang masih terbuka.'
+                    );
+                }
+
+                return;
+            }
             if (
                 $daftar->isDirty(['pertemuan_id', 'kelas_kuliah_id', 'jumlah_peserta', 'dibuka_oleh', 'dibuka_at'])
                 || $daftar->getRawOriginal('status') !== self::TERBUKA || $daftar->status !== self::DITUTUP
@@ -64,6 +99,40 @@ class PresensiPertemuan extends Model
         static::deleting(function (): never {
             throw new LogicException('Daftar presensi tidak boleh dihapus.');
         });
+    }
+
+    public function tambahPesertaHistoris(
+        int $jumlahTambahan,
+        CarbonImmutable $waktu
+    ): void {
+        if (
+            ! $this->exists
+            || DB::transactionLevel() < 1
+            || $this->status !== self::TERBUKA
+            || $jumlahTambahan < 1
+            || $this->revisi >= 4294967295
+            || $this->jumlah_peserta + $jumlahTambahan > 4294967295
+        ) {
+            throw new LogicException(
+                'Penambahan peserta historis tidak memenuhi syarat.'
+            );
+        }
+
+        $jumlahLama = (int) $this->jumlah_peserta;
+        $revisiLama = (int) $this->revisi;
+        $izinSebelumnya = self::$izinSinkronisasiHistoris;
+
+        try {
+            self::$izinSinkronisasiHistoris = true;
+
+            $this->jumlah_peserta = $jumlahLama + $jumlahTambahan;
+            $this->revisi = $revisiLama + 1;
+            $this->updated_at = $waktu;
+
+            $this->save();
+        } finally {
+            self::$izinSinkronisasiHistoris = $izinSebelumnya;
+        }
     }
 
     public function pertemuan(): BelongsTo

@@ -133,15 +133,38 @@
                 <h2 class="text-sm font-bold text-slate-800">Daftar Peserta Belum Disiapkan</h2>
             </div>
             <div class="p-6">
-                @if ($bolehCatat)
-                    <p class="text-sm text-slate-600 mb-4">Peserta diambil secara otomatis dari KRS yang disahkan, dengan
-                        status registrasi semester dan riwayat studi yang aktif saat tombol penyiapan ditekan. Pastikan
-                        proses pengesahan KRS mahasiswa sudah selesai.</p>
+                @if ($bolehCatat || $bolehSiapkanHistoris)
+                    @if ($bolehSiapkanHistoris)
+                        <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                            Pertemuan ini sudah selesai. Admin Akademik dapat menyiapkan daftar historis tanpa mengubah
+                            tanggal pelaksanaan. Peserta tetap harus berasal dari KRS disahkan, dengan registrasi dan
+                            riwayat studi aktif. Status kehadiran tidak diisi otomatis.
+                        </div>
+                    @else
+                        <p class="text-sm text-slate-600 mb-4">Peserta diambil secara otomatis dari KRS yang disahkan,
+                            dengan
+                            status registrasi semester dan riwayat studi yang aktif saat tombol penyiapan ditekan. Pastikan
+                            proses pengesahan KRS mahasiswa sudah selesai.</p>
+                    @endif
                     <form action="{{ route('presensi.siapkan', $sesi) }}" method="post">
                         @csrf
                         <input type="hidden" name="form_presensi" value="siapkan">
                         <input type="hidden" name="versi_pertemuan"
                             value="{{ $teks('siapkan', 'versi_pertemuan', $versiSiapkan) }}">
+
+                        @if ($bolehSiapkanHistoris)
+                            <div class="mb-5">
+                                <label for="alasan-siapkan-historis"
+                                    class="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-700">
+                                    Alasan Penyiapan Historis <span class="text-rose-500">*</span>
+                                </label>
+                                <textarea id="alasan-siapkan-historis" name="alasan" required minlength="10" maxlength="2000" rows="3"
+                                    class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-800">{{ $teks('siapkan', 'alasan') }}</textarea>
+                                @error('alasan')
+                                    <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
+                                @enderror
+                            </div>
+                        @endif
 
                         <div class="mb-5">
                             <label class="flex items-center gap-3 cursor-pointer">
@@ -165,8 +188,8 @@
                             <path stroke-linecap="round" stroke-linejoin="round"
                                 d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
-                        Tombol penyiapan daftar hadir baru akan tersedia saat pertemuan berstatus
-                        <strong>Berlangsung</strong> dan berada dalam masa aktif kelas/periode.
+                        Penyiapan reguler tersedia saat pertemuan berlangsung pada kelas/periode aktif.
+                        Penyiapan historis hanya tersedia bagi Admin Akademik yang berwenang.
                     </div>
                 @endif
             </div>
@@ -230,6 +253,67 @@
                     perubahan KRS setelahnya tidak merubah rekaman.</p>
             </div>
         </div>
+
+
+        @if ($bolehSinkronHistoris)
+            <div class="mb-8 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
+                <div class="border-b border-amber-200 bg-amber-50 px-6 py-4">
+                    <h2 class="text-base font-bold text-amber-900">
+                        Sinkronisasi Peserta Historis
+                    </h2>
+                </div>
+
+                <div class="p-6">
+                    <p class="mb-4 text-sm leading-6 text-slate-700">
+                        Daftar presensi sudah tersedia. Sinkronisasi akan menambahkan
+                        mahasiswa yang memenuhi persyaratan akademik tetapi belum terdaftar.
+                        Status dan catatan peserta lama tidak akan diubah. Peserta baru
+                        akan berstatus Belum Dicatat.
+                    </p>
+
+                    <form action="{{ route('presensi.siapkan', $sesi) }}" method="post">
+                        @csrf
+
+                        <input type="hidden" name="form_presensi" value="siapkan">
+                        <input type="hidden" name="versi_pertemuan"
+                            value="{{ $teks('siapkan', 'versi_pertemuan', $versiSiapkan) }}">
+
+                        <div class="mb-5">
+                            <label for="alasan-sinkronisasi-historis"
+                                class="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-700">
+                                Alasan Sinkronisasi <span class="text-rose-500">*</span>
+                            </label>
+
+                            <textarea id="alasan-sinkronisasi-historis" name="alasan" required minlength="10" maxlength="2000" rows="3"
+                                class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-800">{{ $teks('siapkan', 'alasan') }}</textarea>
+
+                            @error('alasan')
+                                <p class="mt-1 text-xs font-semibold text-rose-600">
+                                    {{ $message }}
+                                </p>
+                            @enderror
+                        </div>
+
+                        <div class="mb-5">
+                            <label class="flex cursor-pointer items-start gap-3">
+                                <input type="checkbox" name="konfirmasi" value="1" required
+                                    class="mt-1 h-4 w-4 rounded border-slate-300 text-siakad-dark focus:ring-siakad-dark">
+                                <span class="text-sm font-medium text-slate-700">
+                                    Saya sudah memeriksa pengesahan KRS dan memastikan
+                                    peserta tambahan memenuhi persyaratan akademik.
+                                </span>
+                            </label>
+                        </div>
+
+                        <button type="submit"
+                            class="rounded-lg bg-siakad-dark px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 transition-colors">
+                            Sinkronkan Peserta Historis
+                        </button>
+                    </form>
+                </div>
+            </div>
+        @endif
+
 
         <div class="rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden w-full mb-8">
             <div class="border-b border-slate-200 bg-slate-50/50 p-4">
@@ -427,7 +511,7 @@
                                                 Koreksi Status
                                             </a>
                                         @endif
-                                    @elseif($bolehKoreksi && $row->status !== \App\Models\Presensi::BELUM)
+                                    @elseif($bolehKoreksi && ($row->status !== \App\Models\Presensi::BELUM || ($adminKoreksi ?? false)))
                                         <a href="{{ route('presensi.edit', ['pertemuan' => $sesi, 'presensi' => $row]) }}"
                                             class="inline-flex w-full items-center justify-center rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-siakad-dark transition-colors mb-2 shadow-sm">
                                             Koreksi Status
@@ -460,7 +544,7 @@
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            @if ($bolehCatat && $daftar->status === \App\Models\PresensiPertemuan::TERBUKA)
+            @if (($bolehCatat || $bolehTutupHistoris) && $daftar->status === \App\Models\PresensiPertemuan::TERBUKA)
                 <div class="rounded-xl bg-amber-50 border border-amber-200 p-6 shadow-sm">
                     <h2 class="text-base font-bold text-amber-800 mb-2">Tutup Sesi Presensi Kelas</h2>
                     @if ($ringkasan[\App\Models\Presensi::BELUM] > 0)
@@ -476,6 +560,20 @@
                             <input type="hidden" name="form_presensi" value="tutup">
                             <input type="hidden" name="versi_daftar"
                                 value="{{ $teks('tutup', 'versi_daftar', $versiTutup) }}">
+
+                            @if ($bolehTutupHistoris)
+                                <div class="mb-5">
+                                    <label for="alasan-tutup-historis"
+                                        class="mb-2 block text-xs font-bold uppercase tracking-wider text-amber-900">
+                                        Alasan Penutupan Historis <span class="text-rose-500">*</span>
+                                    </label>
+                                    <textarea id="alasan-tutup-historis" name="alasan" required minlength="10" maxlength="2000" rows="3"
+                                        class="w-full rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-sm text-slate-800">{{ $teks('tutup', 'alasan') }}</textarea>
+                                    @error('alasan')
+                                        <p class="mt-1 text-xs font-semibold text-rose-600">{{ $message }}</p>
+                                    @enderror
+                                </div>
+                            @endif
 
                             <label class="flex items-start gap-3 cursor-pointer mb-5">
                                 <input type="checkbox" name="konfirmasi" value="1" required

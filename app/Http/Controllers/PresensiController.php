@@ -100,10 +100,31 @@ class PresensiController extends Controller
                 ['path' => route('presensi.show', $pertemuan), 'query' => array_filter(['status' => $filter['status'] ?? null])]
             );
         }
+        $adminKoreksi = $this->akses->admin($request->user());
+
         $bolehCatat = $this->akses->catat($request->user(), $pertemuan)
             && ($daftar === null || $daftar->status === PresensiPertemuan::TERBUKA);
+
+        $bolehSiapkanHistoris = $adminKoreksi
+            && $daftar === null
+            && $pertemuan->status === Pertemuan::SELESAI;
+
+        $bolehSinkronHistoris = $adminKoreksi
+            && $daftar !== null
+            && $daftar->status === PresensiPertemuan::TERBUKA
+            && $pertemuan->status === Pertemuan::SELESAI;
+
+        $bolehTutupHistoris = $adminKoreksi
+            && $daftar !== null
+            && $daftar->status === PresensiPertemuan::TERBUKA
+            && $pertemuan->status === Pertemuan::SELESAI;
+
         $bolehJalankan = $this->akses->jalankan($request->user(), $pertemuan);
         return view('presensi.show', [
+            'adminKoreksi' => $adminKoreksi,
+            'bolehSiapkanHistoris' => $bolehSiapkanHistoris,
+            'bolehSinkronHistoris' => $bolehSinkronHistoris,
+            'bolehTutupHistoris' => $bolehTutupHistoris,
             'sesi' => $pertemuan,
             'daftar' => $daftar,
             'baris' => $baris,
@@ -205,8 +226,27 @@ class PresensiController extends Controller
         $presensi->load('daftar');
         abort_unless($this->akses->admin($request->user()) || ($this->akses->catat($request->user(), $pertemuan)
             && $presensi->daftar->status === PresensiPertemuan::TERBUKA), 403);
-        abort_if($presensi->status === Presensi::BELUM, 409, 'Peserta ini belum dicatat.');
-        return view('presensi.edit', ['sesi' => $pertemuan, 'baris' => $presensi]);
+        $adminKoreksi = $this->akses->admin($request->user());
+
+        abort_unless(
+            $adminKoreksi || (
+                $this->akses->catat($request->user(), $pertemuan)
+                && $presensi->daftar->status === PresensiPertemuan::TERBUKA
+            ),
+            403
+        );
+
+        abort_if(
+            ! $adminKoreksi && $presensi->status === Presensi::BELUM,
+            409,
+            'Peserta belum dicatat. Gunakan pencatatan pertama saat daftar masih terbuka.'
+        );
+
+        return view('presensi.edit', [
+            'sesi' => $pertemuan,
+            'baris' => $presensi,
+            'adminKoreksi' => $adminKoreksi,
+        ]);
     }
     public function koreksi(PresensiRequest $request, Pertemuan $pertemuan, Presensi $presensi): RedirectResponse
     {

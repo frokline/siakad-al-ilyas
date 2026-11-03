@@ -21,3 +21,19 @@ yarn-error.log
 /.nova
 /.vscode
 /.zed
+# Laravel storage runtime
+/storage/app/*
+/storage/framework/*
+/storage/logs/*
+
+# Keep required directory structure
+!/storage/app/.gitignore
+!/storage/framework/.gitignore
+!/storage/logs/.gitignore
+
+*.bak
+buat_admin.php
+Collect-SiakadPresensiAudit.ps1
+audit-presensi-batch-static-check.php
+laporan-audit-deployment.txt
+diff-ktm.txt

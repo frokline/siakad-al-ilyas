@@ -52,16 +52,59 @@ final class KelolaPresensi
                 $daftar = PresensiPertemuan::query()->where('pertemuan_id', $sesi->id)->lockForUpdate()->first();
                 $aktif = $kelas->status === KelasKuliah::AKTIF && $periode->status === 'aktif'
                     && $sesi->status === Pertemuan::BERLANGSUNG;
-                if ($aksi === 'siapkan' && $daftar !== null) {
-                    return; // Pengiriman ulang tidak membuat ulang daftar/snapshot.
+
+                // Penyiapan dan penutupan historis hanya untuk admin
+                // yang sudah diverifikasi lewat role server-side.
+                $siapkanHistorisAdmin = $aksi === 'siapkan' && $admin
+                    && $sesi->status === Pertemuan::SELESAI;
+                $tutupHistorisAdmin = $aksi === 'tutup' && $admin
+                    && $sesi->status === Pertemuan::SELESAI;
+
+                $sinkronHistorisAdmin = $siapkanHistorisAdmin
+                    && $daftar !== null;
+
+                if ($aksi === 'siapkan' && $daftar !== null && ! $sinkronHistorisAdmin) {
+                    return; // Penyiapan biasa tetap tidak membuat ulang daftar.
                 }
-                if (! ($aksi === 'koreksi' && $admin) && ! $aktif) {
-                    $this->gagal('presensi', 'Pencatatan memerlukan pertemuan berlangsung, kelas aktif, dan periode aktif.');
+
+                if (
+                    $sinkronHistorisAdmin
+                    && $daftar->status !== PresensiPertemuan::TERBUKA
+                ) {
+                    $this->gagal(
+                        'presensi',
+                        'Sinkronisasi historis hanya dapat dilakukan pada daftar presensi yang masih terbuka.'
+                    );
+                }
+
+                if (
+                    ! ($aksi === 'koreksi' && $admin)
+                    && ! $siapkanHistorisAdmin
+                    && ! $tutupHistorisAdmin
+                    && ! $aktif
+                ) {
+                    $this->gagal('presensi', 'Pencatatan reguler memerlukan pertemuan berlangsung, kelas aktif, dan periode aktif. Penyiapan/penutupan historis hanya untuk admin akademik pada pertemuan selesai.');
                 }
                 $waktu = CarbonImmutable::now('UTC')->startOfSecond();
 
                 if ($aksi === 'siapkan') {
                     $this->konfirmasi($data);
+                    $alasanSiapkanHistoris = null;
+
+                    if ($siapkanHistorisAdmin) {
+                        $alasanSiapkanHistoris = $data['alasan'] ?? null;
+
+                        if (
+                            ! is_string($alasanSiapkanHistoris)
+                            || mb_strlen(trim($alasanSiapkanHistoris)) < 10
+                            || mb_strlen($alasanSiapkanHistoris) > 2000
+                        ) {
+                            $this->gagal('alasan', 'Alasan penyiapan historis wajib 10–2.000 karakter.');
+                        }
+
+                        $alasanSiapkanHistoris = trim($alasanSiapkanHistoris);
+                    }
+
                     TokenPresensi::periksa(TokenPresensi::pertemuan($sesi), $data['versi_pertemuan'] ?? null, 'versi_pertemuan');
                     // Lock kelas di atas juga digunakan KelolaKrs sebelum mengubah keanggotaan kelas.
                     // Lock join menjaga snapshot identitas, KRS, registrasi, dan riwayat tetap konsisten.
@@ -88,8 +131,100 @@ final class KelolaPresensi
                         $this->gagal('presensi', 'Belum ada peserta dengan KRS disahkan dan registrasi/riwayat aktif.');
                     }
                     if ($peserta->pluck('mahasiswa_id')->unique()->count() !== $peserta->count()) {
-                        $this->gagal('presensi', 'Ada mahasiswa ganda dalam peserta kelas. Perbaiki KRS sebelum membuka presensi.');
+                        $this->gagal(
+                            'presensi',
+                            'Ada mahasiswa ganda dalam peserta kelas. Perbaiki KRS sebelum membuka presensi.'
+                        );
                     }
+
+                    // Jalur sinkronisasi untuk daftar historis yang sudah ada.
+                    if ($sinkronHistorisAdmin) {
+                        $barisLama = $daftar->presensi()
+                            ->orderBy('id')
+                            ->lockForUpdate()
+                            ->get(['id', 'mahasiswa_id']);
+
+                        // Pastikan jumlah peserta aktual sesuai dengan metadata daftar.
+                        if ($barisLama->count() !== (int) $daftar->jumlah_peserta) {
+                            $this->gagal(
+                                'presensi',
+                                'Jumlah peserta pada daftar tidak konsisten. Periksa integritas data sebelum sinkronisasi.'
+                            );
+                        }
+
+                        $idsMahasiswaLama = $barisLama
+                            ->pluck('mahasiswa_id')
+                            ->map(fn($id) => (int) $id)
+                            ->all();
+
+                        // Ambil hanya mahasiswa yang belum ada dalam daftar tersimpan.
+                        $pesertaTambahan = $peserta
+                            ->reject(fn($orang) => in_array(
+                                (int) $orang->mahasiswa_id,
+                                $idsMahasiswaLama,
+                                true
+                            ))
+                            ->values();
+
+                        $jumlahTambahan = $pesertaTambahan->count();
+
+                        $sebelumDaftar = $daftar->ringkasanAudit();
+
+                        if (
+                            $jumlahTambahan > 0
+                            && (
+                                $daftar->revisi >= 4294967295
+                                || $daftar->jumlah_peserta + $jumlahTambahan > 4294967295
+                            )
+                        ) {
+                            $this->gagal(
+                                'presensi',
+                                'Batas jumlah peserta atau revisi tercapai.'
+                            );
+                        }
+
+                        // Buat baris hanya untuk mahasiswa baru.
+                        foreach ($pesertaTambahan as $orang) {
+                            $baris = new Presensi();
+                            $baris->presensi_pertemuan_id = $daftar->id;
+                            $baris->kelas_kuliah_id = $kelas->id;
+                            $baris->detail_krs_id = (int) $orang->detail_krs_id;
+                            $baris->mahasiswa_id = (int) $orang->mahasiswa_id;
+                            $baris->peserta_snapshot = (array) $orang;
+                            $baris->status = Presensi::BELUM;
+                            $baris->revisi = 1;
+                            $baris->save();
+
+                            $this->audit(
+                                $baris,
+                                $pelaku,
+                                'presensi',
+                                'sinkronkan_historis',
+                                null,
+                                $alasanSiapkanHistoris,
+                                $waktu
+                            );
+                        }
+
+                        // Perubahan metadata daftar dilakukan melalui method model khusus.
+                        // Method ini akan kita tambahkan setelah memeriksa modelnya.
+                        if ($jumlahTambahan > 0) {
+                            $daftar->tambahPesertaHistoris($jumlahTambahan, $waktu);
+                        }
+
+                        $this->audit(
+                            $daftar,
+                            $pelaku,
+                            'presensi_pertemuan',
+                            'sinkronkan_historis',
+                            $sebelumDaftar,
+                            $alasanSiapkanHistoris,
+                            $waktu
+                        );
+
+                        return;
+                    }
+
                     $daftar = new PresensiPertemuan();
                     $daftar->pertemuan_id = $sesi->id;
                     $daftar->kelas_kuliah_id = $kelas->id;
@@ -99,7 +234,13 @@ final class KelolaPresensi
                     $daftar->dibuka_at = $waktu;
                     $daftar->revisi = 1;
                     $daftar->save();
-                    $this->audit($daftar, $pelaku, 'presensi_pertemuan', 'siapkan', null, 'Membekukan daftar peserta dari KRS disahkan.', $waktu);
+
+                    $aksiSiapkan = $siapkanHistorisAdmin ? 'siapkan_historis' : 'siapkan';
+                    $alasanAuditSiapkan = $siapkanHistorisAdmin
+                        ? $alasanSiapkanHistoris
+                        : 'Membekukan daftar peserta dari KRS disahkan.';
+
+                    $this->audit($daftar, $pelaku, 'presensi_pertemuan', $aksiSiapkan, null, $alasanAuditSiapkan, $waktu);
                     foreach ($peserta as $orang) {
                         $baris = new Presensi();
                         $baris->presensi_pertemuan_id = $daftar->id;
@@ -110,7 +251,16 @@ final class KelolaPresensi
                         $baris->status = Presensi::BELUM;
                         $baris->revisi = 1;
                         $baris->save();
-                        $this->audit($baris, $pelaku, 'presensi', 'siapkan', null, null, $waktu);
+
+                        $this->audit(
+                            $baris,
+                            $pelaku,
+                            'presensi',
+                            $aksiSiapkan,
+                            null,
+                            $siapkanHistorisAdmin ? $alasanSiapkanHistoris : null,
+                            $waktu
+                        );
                     }
                     return;
                 }
@@ -123,6 +273,23 @@ final class KelolaPresensi
                     if ($daftar->status === PresensiPertemuan::DITUTUP) {
                         return;
                     }
+
+                    $alasanTutupHistoris = null;
+
+                    if ($tutupHistorisAdmin) {
+                        $alasanTutupHistoris = $data['alasan'] ?? null;
+
+                        if (
+                            ! is_string($alasanTutupHistoris)
+                            || mb_strlen(trim($alasanTutupHistoris)) < 10
+                            || mb_strlen($alasanTutupHistoris) > 2000
+                        ) {
+                            $this->gagal('alasan', 'Alasan penutupan historis wajib 10–2.000 karakter.');
+                        }
+
+                        $alasanTutupHistoris = trim($alasanTutupHistoris);
+                    }
+
                     $baris = $daftar->presensi()->orderBy('id')->lockForUpdate()->get();
                     TokenPresensi::periksa($daftar->versiPenutupan($baris), $data['versi_daftar'] ?? null, 'versi_daftar');
                     if ($baris->count() !== $daftar->jumlah_peserta || $baris->contains('status', Presensi::BELUM)) {
@@ -134,7 +301,13 @@ final class KelolaPresensi
                     $daftar->ditutup_at = $waktu;
                     $daftar->revisi++;
                     $daftar->save();
-                    $this->audit($daftar, $pelaku, 'presensi_pertemuan', 'tutup', $sebelum, 'Seluruh peserta telah diperiksa.', $waktu);
+
+                    $aksiTutup = $tutupHistorisAdmin ? 'tutup_historis' : 'tutup';
+                    $alasanAuditTutup = $tutupHistorisAdmin
+                        ? $alasanTutupHistoris
+                        : 'Seluruh peserta telah diperiksa.';
+
+                    $this->audit($daftar, $pelaku, 'presensi_pertemuan', $aksiTutup, $sebelum, $alasanAuditTutup, $waktu);
                     return;
                 }
 
@@ -161,8 +334,11 @@ final class KelolaPresensi
                     if (! is_string($alasan) || mb_strlen(trim($alasan)) < 10 || mb_strlen($alasan) > 2000) {
                         $this->gagal('alasan', 'Alasan koreksi wajib 10–2.000 karakter.');
                     }
-                    if ($baris->status === Presensi::BELUM) {
-                        $this->gagal('presensi', 'Gunakan tombol pencatatan pertama untuk peserta ini.');
+                    if ($baris->status === Presensi::BELUM && ! $admin) {
+                        $this->gagal(
+                            'presensi',
+                            'Peserta belum dicatat. Dosen harus menggunakan pencatatan pertama; koreksi awal hanya untuk admin akademik.'
+                        );
                     }
                 }
                 // Efek idempoten: kiriman identik tidak menaikkan revisi atau membuat audit ganda.
