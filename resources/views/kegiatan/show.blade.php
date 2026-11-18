@@ -82,9 +82,7 @@
 
                         <div class="p-6">
                             @if ($kegiatan->instruksi)
-                                <div class="whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">
-                                    {{ $kegiatan->instruksi }}
-                                </div>
+                                <div class="whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">{{ $kegiatan->instruksi }}</div>
                             @else
                                 <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5">
                                     <p class="text-sm italic text-slate-500">

@@ -122,7 +122,7 @@
                         class="rounded-lg bg-siakad-dark px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800">Edit
                         jawaban</a>
 
-                    <form method="post" action="{{ route('pengumpulan.destroy', $pengumpulan) }}"
+                    {{-- <form method="post" action="{{ route('pengumpulan.destroy', $pengumpulan) }}"
                         onsubmit="return confirm('Hapus jawaban ini?')">
                         @csrf
                         @method('DELETE')
@@ -130,7 +130,7 @@
                         <button type="submit"
                             class="rounded-lg border border-rose-200 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50">Hapus
                             jawaban</button>
-                    </form>
+                    </form> --}}
                 </div>
             </section>
         @elseif ($pemilik && $pengumpulan->status === \App\Models\Pengumpulan::TERKIRIM)

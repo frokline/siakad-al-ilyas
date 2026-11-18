@@ -21,6 +21,18 @@
             @if ($sesi->dapatDiubah())
                 <a class="inline-flex items-center gap-2 rounded-lg bg-siakad-dark px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-800"
                     href="{{ route('admin.pertemuan.edit', $sesi) }}">Edit Rencana</a>
+            @elseif (! in_array($sesi->status, [\App\Models\Pertemuan::TERJADWAL, \App\Models\Pertemuan::SELESAI], true))
+                <span
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-400 shadow-sm cursor-not-allowed"
+                    title="Edit rencana hanya tersedia untuk sesi Terjadwal atau Selesai.">
+                    Edit Rencana (terkunci)
+                </span>
+            @else
+                <span
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-400 shadow-sm cursor-not-allowed"
+                    title="Kelas atau periode akademik sudah ditutup, sehingga rencana tidak dapat diubah.">
+                    Edit Rencana (terkunci)
+                </span>
             @endif
             <a class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
                 href="{{ route('admin.pertemuan.create', ['kelas_id' => $kelas->id]) }}">Buat sesi lain</a>

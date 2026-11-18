@@ -73,6 +73,7 @@ final class KegiatanController extends Controller
                 'kelas_kuliah_id',
                 'judul',
                 'jenis',
+                'metode',
                 'status',
                 'buka_at',
                 'tenggat_at',

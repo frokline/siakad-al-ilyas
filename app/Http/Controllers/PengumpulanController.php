@@ -88,12 +88,12 @@ class PengumpulanController extends Controller
 
             $query->whereHas(
                 'kegiatan',
-                fn ($kegiatan) =>
-                    $kegiatan->where(
-                        'judul',
-                        'like',
-                        '%' . $pencarian . '%'
-                    )
+                fn($kegiatan) =>
+                $kegiatan->where(
+                    'judul',
+                    'like',
+                    '%' . $pencarian . '%'
+                )
             );
         }
 
@@ -125,7 +125,7 @@ class PengumpulanController extends Controller
             )
             ->pluck('id')
             ->map(
-                fn ($id): int => (int) $id
+                fn($id): int => (int) $id
             )
             ->all();
 
@@ -166,22 +166,22 @@ class PengumpulanController extends Controller
         $pengumpulan = $detailId === null
             ? null
             : Pengumpulan::query()
-                ->where(
-                    'kegiatan_id',
-                    $kegiatan->getKey()
-                )
-                ->where(
-                    'detail_krs_id',
-                    $detailId
-                )
-                ->where(
-                    'pemilik_id',
-                    $request->user()->getKey()
-                )
-                ->with([
-                    'lampiran.berkas',
-                ])
-                ->first();
+            ->where(
+                'kegiatan_id',
+                $kegiatan->getKey()
+            )
+            ->where(
+                'detail_krs_id',
+                $detailId
+            )
+            ->where(
+                'pemilik_id',
+                $request->user()->getKey()
+            )
+            ->with([
+                'lampiran.berkas',
+            ])
+            ->first();
 
         return view('pengumpulan.saya', [
             'kegiatan' => $kegiatan,
@@ -257,12 +257,12 @@ class PengumpulanController extends Controller
             ->leftJoinSub(
                 $jawabanAktif,
                 'jawaban',
-                fn ($join) =>
-                    $join->on(
-                        'jawaban.detail_krs_id',
-                        '=',
-                        'd.id'
-                    )
+                fn($join) =>
+                $join->on(
+                    'jawaban.detail_krs_id',
+                    '=',
+                    'd.id'
+                )
             );
 
         $total = (clone $peserta)->count('d.id');
@@ -275,18 +275,18 @@ class PengumpulanController extends Controller
             $pencarian = trim($filter['q']);
 
             $peserta->where(
-                fn ($query) =>
-                    $query
-                        ->where(
-                            'u.nama',
-                            'like',
-                            '%' . $pencarian . '%'
-                        )
-                        ->orWhere(
-                            'm.nim',
-                            'like',
-                            '%' . $pencarian . '%'
-                        )
+                fn($query) =>
+                $query
+                    ->where(
+                        'u.nama',
+                        'like',
+                        '%' . $pencarian . '%'
+                    )
+                    ->orWhere(
+                        'm.nim',
+                        'like',
+                        '%' . $pencarian . '%'
+                    )
             );
         }
 
@@ -418,9 +418,9 @@ class PengumpulanController extends Controller
             'pemilik' => $pemilik,
 
             'bolehTulis' =>
-                $pemilik
+            $pemilik
                 && $pengumpulan->status
-                    === Pengumpulan::TERKIRIM
+                === Pengumpulan::TERKIRIM
                 && $akses->bolehTulis(
                     $request->user(),
                     $pengumpulan->kegiatan
@@ -561,7 +561,7 @@ class PengumpulanController extends Controller
                 'lampiran' => $lampiran->getKey(),
                 'pemohon' => $request->user()->getKey(),
                 'versi_pengumpulan' =>
-                    $pengumpulan->revisi,
+                $pengumpulan->revisi,
                 'versi_berkas' => $berkas->revisi,
             ]
         );
@@ -593,7 +593,7 @@ class PengumpulanController extends Controller
                 'Unduh jawaban gagal.',
                 [
                     'pengumpulan_id' =>
-                        $pengumpulan->getKey(),
+                    $pengumpulan->getKey(),
 
                     'berkas_id' => $berkas->getKey(),
 
@@ -657,19 +657,19 @@ class PengumpulanController extends Controller
             $namaUnduhan,
             [
                 'Content-Type' =>
-                    'application/octet-stream',
+                'application/octet-stream',
 
                 'X-Content-Type-Options' =>
-                    'nosniff',
+                'nosniff',
 
                 'Cache-Control' =>
-                    'private, no-store',
+                'private, no-store',
 
                 'Referrer-Policy' =>
-                    'no-referrer',
+                'no-referrer',
 
                 'Content-Length' =>
-                    (string) $lampiran->ukuran_byte,
+                (string) $lampiran->ukuran_byte,
             ]
         );
     }
@@ -696,7 +696,7 @@ class PengumpulanController extends Controller
         abort_unless(
             $berkas->status === Berkas::TERSEDIA
                 && (int) $berkas->diunggah_oleh
-                    === (int) $pengumpulan->pemilik_id
+                === (int) $pengumpulan->pemilik_id
                 && $lampiran->cocok($berkas),
             404
         );
@@ -713,9 +713,9 @@ class PengumpulanController extends Controller
             $request->query('pemohon')
                 === (string) $request->user()->getKey()
                 && $request->query('versi_pengumpulan')
-                    === (string) $pengumpulan->revisi
+                === (string) $pengumpulan->revisi
                 && $request->query('versi_berkas')
-                    === (string) $berkas->revisi,
+                === (string) $berkas->revisi,
             403,
             'Tautan berubah. Klik tombol Unduh kembali.'
         );

@@ -33,7 +33,8 @@
                             d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
                     <div>Formulir dikunci. Perubahan rencana hanya dapat dilakukan pada sesi yang masih berstatus
-                        <strong>Terjadwal</strong>, serta kelas dan periode terkait harus berstatus terbuka.</div>
+                        <strong>Terjadwal</strong> atau <strong>Selesai</strong> (koreksi kesalahan input), serta kelas
+                        dan periode terkait harus berstatus terbuka. Waktu aktual tidak dapat diubah.</div>
                 </div>
             @endunless
             <form method="POST" action="{{ route('admin.pertemuan.update', $sesi) }}">@include('admin.pertemuan._form')</form>

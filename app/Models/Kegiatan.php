@@ -365,9 +365,16 @@ class Kegiatan extends Model
             return 'Belum mulai';
         }
 
-        return $this->jendelaTerbuka()
-            ? 'Dapat dikumpulkan'
-            : 'Tenggat telah lewat';
+        if ($this->jendelaTerbuka()) {
+            return 'Dapat dikumpulkan';
+        }
+
+        return $this->tenggat_at !== null
+            && $this->tenggat_at->lte(
+                CarbonImmutable::now('UTC')
+            )
+            ? 'Tenggat telah lewat'
+            : 'Belum tersedia';
     }
 
     public function ringkasanAudit(): array

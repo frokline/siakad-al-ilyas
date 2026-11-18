@@ -183,7 +183,52 @@ Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private']
             'show',
         ])->name('portal.ktm.show');
 
-        // Kelas & peserta kelas milik dosen
+        
+                // Profil dosen
+        Route::prefix('dosen/profil-saya')
+            ->name('portal.dosen.profil.')
+            ->group(function (): void {
+
+                // Menampilkan profil dosen
+                Route::get('/', [
+                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    'show',
+                ])->name('show');
+
+                // Form edit profil
+                Route::get('/edit', [
+                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    'edit',
+                ])->name('edit');
+
+                // Menyimpan informasi kontak
+                Route::patch('/', [
+                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    'update',
+                ])->name('update');
+
+                // Menampilkan foto profil
+                Route::get('/foto', [
+                    \App\Http\Controllers\PortalFotoProfilDosenController::class,
+                    'show',
+                ])->name('foto');
+
+                // Mengganti foto profil
+                Route::post('/foto', [
+                    \App\Http\Controllers\PortalFotoProfilDosenController::class,
+                    'update',
+                ])->middleware('throttle:10,1')
+                    ->name('foto.update');
+
+                // Mengganti kata sandi
+                Route::patch('/password', [
+                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    'updatePassword',
+                ])->name('password.update');
+
+            });
+            
+             // Kelas & peserta kelas milik dosen
         Route::prefix('dosen/kelas-saya')
             ->name('portal.dosen.')
             ->group(function (): void {

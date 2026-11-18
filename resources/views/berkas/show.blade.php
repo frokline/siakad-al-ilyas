@@ -84,11 +84,11 @@
                     </form>
                 @endcan
 
-                @can('update', $file)
+                {{-- @can('update', $file)
                     <a href="{{ route('berkas.edit', $file) }}"
                         class="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Edit
                         keterangan</a>
-                @endcan
+                @endcan --}}
 
                 <a href="{{ route('berkas.show', $file) }}"
                     class="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Muat
@@ -114,7 +114,7 @@
                     {{ $nonaktif ? 'Berkas yang sudah dipakai di modul lain tidak dapat dinonaktifkan. Riwayat dan isi file tetap disimpan.' : 'Aktifkan kembali berkas agar dapat diunduh.' }}
                 </p>
 
-                <form action="{{ $nonaktif ? route('berkas.nonaktifkan', $file) : route('berkas.pulihkan', $file) }}"
+                {{-- <form action="{{ $nonaktif ? route('berkas.nonaktifkan', $file) : route('berkas.pulihkan', $file) }}"
                     method="post" class="mt-4 space-y-4">
                     @csrf
                     <input type="hidden" name="versi" value="{{ $teks('versi', $file->versiForm()) }}">
@@ -141,7 +141,7 @@
                     <button type="submit"
                         class="rounded-lg border px-5 py-2.5 text-sm font-semibold {{ $nonaktif ? 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50' : 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50' }}">{{ $nonaktif ? 'Nonaktifkan' : 'Pulihkan' }}</button>
                 </form>
-            </section>
+            </section> --}}
         @endif
 
         <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

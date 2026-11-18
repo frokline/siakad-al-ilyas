@@ -51,7 +51,7 @@
                 @if ($bolehTulis)
                     <a href="{{ route('pengumpulan.edit', $pengumpulan) }}" class="{{ $sekunder }}">Edit jawaban</a>
 
-                    <form method="post" action="{{ route('pengumpulan.destroy', $pengumpulan) }}"
+                    {{-- <form method="post" action="{{ route('pengumpulan.destroy', $pengumpulan) }}"
                         onsubmit="return confirm('Hapus jawaban ini? Tindakan akan dicatat oleh sistem.')">
                         @csrf
                         @method('DELETE')
@@ -59,7 +59,7 @@
                         <button type="submit"
                             class="rounded-lg border border-rose-200 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50">Hapus
                             jawaban</button>
-                    </form>
+                    </form> --}}
                 @endif
             </div>
 

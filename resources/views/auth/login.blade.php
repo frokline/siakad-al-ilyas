@@ -5,7 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+
     <title>@yield('title', 'Masuk Portal Akademik') | Ilyas Institut</title>
+    {{-- Favicon ILYAS INSTITUT --}}
+    <link rel="icon" type="image/png" sizes="512x512"
+        href="{{ asset('images/favicon-rapi.png') }}?v=2">
+
     <link rel="stylesheet" href="{{ asset('css/login.css') }}">
     <link rel="stylesheet" href="{{ asset('css/login-mobile.css') }}">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -19,7 +24,7 @@
 
             <div class="visual-content">
                 <p class="visual-label">Portal Akademik</p>
-                <h1>Selamat datang di <span>Ilyas Institut.</span></h1>
+                <h1>Siakad<br><span>Ilyas Institut.</span></h1>
                 <p class="visual-description">
                     Akses layanan akademik Anda melalui satu portal yang mudah, nyaman, dan terintegrasi.
                 </p>

@@ -87,7 +87,7 @@ final class KelolaPertemuan
                     $this->gagal('konfirmasi', 'Konfirmasi tindakan belum diberikan.');
                 }
 
-                $sesi = $baru ? new Pertemuan() : $semuaSesi->firstWhere('id', $bound->id);
+                $sesi = $baru ? new Pertemuan : $semuaSesi->firstWhere('id', $bound->id);
                 abort_unless($sesi, 404);
                 if ($baru) {
                     $sesi->kelas_kuliah_id = $kelas->id;
@@ -112,13 +112,13 @@ final class KelolaPertemuan
                     $this->gagal('pertemuan', 'Kelas/periode harus terbuka, prodi/kurikulum aktif, dan paket sudah diterbitkan.');
                 }
                 $asalYangDiizinkan = [
-                    'ubah' => Pertemuan::TERJADWAL,
-                    'mulai' => Pertemuan::TERJADWAL,
-                    'selesai' => Pertemuan::BERLANGSUNG,
-                    'batalkan' => Pertemuan::TERJADWAL,
-                    'pulihkan' => Pertemuan::BATAL,
+                    'ubah' => [Pertemuan::TERJADWAL, Pertemuan::SELESAI],
+                    'mulai' => [Pertemuan::TERJADWAL],
+                    'selesai' => [Pertemuan::BERLANGSUNG],
+                    'batalkan' => [Pertemuan::TERJADWAL],
+                    'pulihkan' => [Pertemuan::BATAL],
                 ];
-                if (! $baru && $sesi->status !== $asalYangDiizinkan[$aksi]) {
+                if (! $baru && ! in_array($sesi->status, $asalYangDiizinkan[$aksi], true)) {
                     $this->gagal('pertemuan', 'Tindakan tidak sesuai dengan status pertemuan saat ini.');
                 }
 
@@ -274,7 +274,7 @@ final class KelolaPertemuan
                 $sesi->revisi = $baru ? 1 : $sesi->revisi + 1;
                 $sesi->save();
 
-                $audit = new AuditLog();
+                $audit = new AuditLog;
                 $audit->pelaku_id = $pelaku->id;
                 $audit->entitas = 'pertemuan';
                 $audit->entitas_id = $sesi->id;
@@ -285,6 +285,7 @@ final class KelolaPertemuan
                 $audit->alasan = trim($alasan);
                 $audit->waktu = $waktu;
                 $audit->save();
+
                 return $sesi;
             }, 3);
         } catch (QueryException $exception) {

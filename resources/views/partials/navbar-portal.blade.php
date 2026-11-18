@@ -14,6 +14,12 @@
     <!-- Area Tautan Menu -->
     <div class="flex flex-wrap items-center gap-2 md:gap-3 text-sm font-medium">
         @if ($dosen)
+          @if (Route::has('portal.dosen.profil.show'))
+            <a href="{{ route('portal.dosen.profil.show') }}"
+                class="whitespace-nowrap px-3 py-2 rounded-lg transition-colors {{ request()->routeIs('portal.dosen.profil.*') ? 'bg-siakad-active text-white font-semibold shadow-sm' : 'text-emerald-100 hover:bg-white/10 hover:text-white' }}">
+                Profil Saya
+            </a>
+         @endif
             @if (Route::has('portal.dosen.kelas.index'))
                 <a href="{{ route('portal.dosen.kelas.index') }}"
                     class="whitespace-nowrap px-3 py-2 rounded-lg transition-colors {{ request()->routeIs('portal.dosen.kelas*') ? 'bg-siakad-active text-white font-semibold shadow-sm' : 'text-emerald-100 hover:bg-white/10 hover:text-white' }}">

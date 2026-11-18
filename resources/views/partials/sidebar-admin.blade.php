@@ -1,10 +1,9 @@
 <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
     class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-siakad-dark text-white transition-transform duration-300 lg:static lg:translate-x-0 shadow-2xl">
+    @php
+        $logoKampus = 'images/logo-ilyas-institut.png';
+    @endphp
     <div class="flex h-16 shrink-0 items-center px-6 gap-3">
-        {{-- Logo kampus: public/images/logo-ilyas-institut.png. Jika file belum ada, tampil ikon lama. --}}
-        @php
-            $logoKampus = 'images/logo-ilyas-institut.png';
-        @endphp
         @if (is_file(public_path($logoKampus)))
             <img src="{{ asset($logoKampus) }}" alt="Logo ILYAS INSTITUT"
                 class="h-10 w-10 shrink-0 rounded-lg bg-white object-cover shadow-sm ring-1 ring-white/20">

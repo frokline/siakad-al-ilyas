@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -14,17 +16,24 @@ use Illuminate\Validation\ValidationException;
 class Pertemuan extends Model
 {
     public const TERJADWAL = 'terjadwal';
+
     public const BERLANGSUNG = 'berlangsung';
+
     public const SELESAI = 'selesai';
+
     public const BATAL = 'batal';
+
     public const STATUS = [
         self::TERJADWAL => 'Terjadwal',
         self::BERLANGSUNG => 'Berlangsung',
         self::SELESAI => 'Selesai',
         self::BATAL => 'Batal',
     ];
+
     public const BELUM_TUNTAS = [self::TERJADWAL, self::BERLANGSUNG];
+
     public const JENIS = ['kuliah' => 'Kuliah', 'uts' => 'UTS', 'uas' => 'UAS', 'pengganti' => 'Pengganti'];
+
     public const AKSI = [
         'buat' => 'Membuat pertemuan',
         'ubah' => 'Mengubah rencana',
@@ -33,6 +42,7 @@ class Pertemuan extends Model
         'batalkan' => 'Membatalkan pertemuan',
         'pulihkan' => 'Memulihkan pertemuan',
     ];
+
     public const KOLOM_RENCANA = [
         'jadwal_kuliah_id',
         'pengajar_kelas_id',
@@ -48,7 +58,9 @@ class Pertemuan extends Model
     ];
 
     protected $table = 'pertemuan';
+
     protected $guarded = ['*'];
+
     protected $hidden = ['tautan_pertemuan'];
 
     protected function casts(): array
@@ -83,6 +95,7 @@ class Pertemuan extends Model
                 if ($sesi->status !== self::TERJADWAL || $sesi->revisi !== 1) {
                     self::gagal('Pertemuan baru harus terjadwal pada revisi pertama.');
                 }
+
                 return;
             }
             if (
@@ -96,12 +109,14 @@ class Pertemuan extends Model
                 self::TERJADWAL => [self::TERJADWAL, self::BERLANGSUNG, self::BATAL],
                 self::BERLANGSUNG => [self::SELESAI],
                 self::BATAL => [self::TERJADWAL],
-                self::SELESAI => [],
+                // Sesi selesai tetap boleh menyimpan koreksi rencana (status tidak berubah).
+                self::SELESAI => [self::SELESAI],
             ];
             if (! in_array($sesi->status, $transisi[$asal] ?? [], true)) {
                 self::gagal('Perubahan status tidak diizinkan.');
             }
-            $editRencana = $asal === self::TERJADWAL && $sesi->status === self::TERJADWAL;
+            $editRencana = $asal === $sesi->status
+                && in_array($asal, [self::TERJADWAL, self::SELESAI], true);
             if (! $editRencana && $sesi->isDirty(self::KOLOM_RENCANA)) {
                 self::gagal('Rencana tidak boleh ikut berubah saat menjalankan tindakan status.');
             }
@@ -157,7 +172,8 @@ class Pertemuan extends Model
 
     public function dapatDiubah(): bool
     {
-        return $this->status === self::TERJADWAL && $this->konteksTerbuka();
+        return in_array($this->status, [self::TERJADWAL, self::SELESAI], true)
+            && $this->konteksTerbuka();
     }
 
     public function memilikiTautan(): bool
@@ -184,7 +200,7 @@ class Pertemuan extends Model
             'realisasi' => ['nullable', 'string', 'max:20000'],
             'metode' => ['required', Rule::in(array_keys(JadwalKuliah::METODE))],
             'lokasi' => ['nullable', 'string', 'max:150', 'required_if:metode,luring,campuran', 'prohibited_if:metode,daring'],
-            'tautan_pertemuan' => ['nullable', 'string', 'max:2048', 'prohibited_if:metode,luring', new TautanPertemuanAman()],
+            'tautan_pertemuan' => ['nullable', 'string', 'max:2048', 'prohibited_if:metode,luring', new TautanPertemuanAman],
         ])->validate();
 
         if (
@@ -237,6 +253,7 @@ class Pertemuan extends Model
         foreach (['mulai_rencana', 'selesai_rencana', 'mulai_aktual', 'selesai_aktual', 'dibatalkan_at'] as $kolom) {
             $hasil[$kolom] = $this->{$kolom}?->format('Y-m-d H:i:s');
         }
+
         return $hasil;
     }
 
@@ -245,16 +262,16 @@ class Pertemuan extends Model
         throw ValidationException::withMessages(['pertemuan' => $pesan]);
     }
 
-    public function presensiPertemuan(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function presensiPertemuan(): HasOne
     {
-        return $this->hasOne(\App\Models\PresensiPertemuan::class, 'pertemuan_id');
+        return $this->hasOne(PresensiPertemuan::class, 'pertemuan_id');
     }
 
-    public function presensi(): \Illuminate\Database\Eloquent\Relations\HasManyThrough
+    public function presensi(): HasManyThrough
     {
         return $this->hasManyThrough(
-            \App\Models\Presensi::class,
-            \App\Models\PresensiPertemuan::class,
+            Presensi::class,
+            PresensiPertemuan::class,
             'pertemuan_id',
             'presensi_pertemuan_id',
             'id',
@@ -262,8 +279,8 @@ class Pertemuan extends Model
         );
     }
 
-    public function kegiatan(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function kegiatan(): HasMany
     {
-        return $this->hasMany(\App\Models\Kegiatan::class, 'pertemuan_id');
+        return $this->hasMany(Kegiatan::class, 'pertemuan_id');
     }
 }
