@@ -42,6 +42,10 @@
             display: none !important;
         }
 
+        [hidden] {
+            display: none !important;
+        }
+
         html {
             scroll-behavior: smooth;
         }

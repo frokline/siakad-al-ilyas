@@ -1,18 +1,7 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-
-// Middleware
-use App\Http\Middleware\AuthenticateBerkas;
-use App\Http\Middleware\AuthenticateKegiatan;
-use App\Http\Middleware\AuthenticateKeuangan;
-use App\Http\Middleware\AuthenticatePengumpulan;
-use App\Http\Middleware\AuthenticatePresensi;
-use App\Http\Middleware\AuthenticateSurat;
-use App\Http\Middleware\EnsureRoleManagementAccess;
-
-// Controllers
 use App\Http\Controllers\AdminDashboardController;
+// Middleware
 use App\Http\Controllers\Auth\PortalSessionController;
 use App\Http\Controllers\BerkasController;
 use App\Http\Controllers\DosenController;
@@ -20,6 +9,7 @@ use App\Http\Controllers\JadwalKuliahController;
 use App\Http\Controllers\JenisBiayaController;
 use App\Http\Controllers\JenisSuratController;
 use App\Http\Controllers\KalenderAkademikController;
+// Controllers
 use App\Http\Controllers\KegiatanController;
 use App\Http\Controllers\KelasKuliahController;
 use App\Http\Controllers\KeuanganDashboardController;
@@ -34,15 +24,20 @@ use App\Http\Controllers\PembayaranController;
 use App\Http\Controllers\PengajarKelasController;
 use App\Http\Controllers\PengumpulanController;
 use App\Http\Controllers\PengumumanController;
-use App\Http\Controllers\PermohonanSuratController;
 use App\Http\Controllers\PeriodeAkademikController;
+use App\Http\Controllers\PermohonanSuratController;
 use App\Http\Controllers\PertemuanController;
+use App\Http\Controllers\Portal\PortalBiodataMahasiswaController;
+use App\Http\Controllers\Portal\PortalKtmMahasiswaController;
+use App\Http\Controllers\PortalFotoProfilDosenController;
+use App\Http\Controllers\PortalFotoProfilMahasiswaController;
 use App\Http\Controllers\PortalJadwalController;
 use App\Http\Controllers\PortalKelasDosenController;
 use App\Http\Controllers\PortalKrsController;
 use App\Http\Controllers\PortalMahasiswaController;
 use App\Http\Controllers\PortalPesertaKelasDosenController;
 use App\Http\Controllers\PortalPresensiMahasiswaController;
+use App\Http\Controllers\PortalProfilDosenController;
 use App\Http\Controllers\PortalProfilMahasiswaController;
 use App\Http\Controllers\PresensiController;
 use App\Http\Controllers\ProgramStudiController;
@@ -52,9 +47,15 @@ use App\Http\Controllers\RoleController;
 use App\Http\Controllers\RombelController;
 use App\Http\Controllers\TagihanController;
 use App\Http\Controllers\UserController;
-use App\Http\Controllers\PortalFotoProfilMahasiswaController;
-use App\Http\Controllers\Portal\PortalBiodataMahasiswaController;
-use App\Http\Controllers\Portal\PortalKtmMahasiswaController;
+use App\Http\Middleware\AuthenticateBerkas;
+use App\Http\Middleware\AuthenticateKegiatan;
+use App\Http\Middleware\AuthenticateKeuangan;
+use App\Http\Middleware\AuthenticatePengumpulan;
+use App\Http\Middleware\AuthenticatePresensi;
+use App\Http\Middleware\AuthenticateSurat;
+use App\Http\Middleware\EnsureRoleManagementAccess;
+use Illuminate\Support\Facades\Route;
+
 /*
 |--------------------------------------------------------------------------
 | 1. LOGIN & LOGOUT (pintu masuk tunggal seluruh pengguna)
@@ -64,7 +65,9 @@ use App\Http\Controllers\Portal\PortalKtmMahasiswaController;
 Route::controller(PortalSessionController::class)
     ->middleware('cache.headers:no_store;private')
     ->group(function (): void {
+        // jika dia sudah punya sesi login maka arahkan ke home, jika tidak 'retun login'
         Route::get('/', 'home')->name('home');
+        // hanya di jalankan ketika pengguna membuka laman login '/login'
         Route::get('/login', 'create')->name('login');
         Route::post('/login', 'store')
             ->middleware('throttle:portal-login')
@@ -140,22 +143,21 @@ Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private']
                 Route::patch('/', 'update')->name('update');
             });
 
-        //biodata mahasiswa
+        // biodata mahasiswa
         Route::get('/biodata', [
-            \App\Http\Controllers\Portal\PortalBiodataMahasiswaController::class,
+            PortalBiodataMahasiswaController::class,
             'show',
         ])->name('portal.biodata.show');
 
         Route::get('/biodata/edit', [
-            \App\Http\Controllers\Portal\PortalBiodataMahasiswaController::class,
+            PortalBiodataMahasiswaController::class,
             'edit',
         ])->name('portal.biodata.edit');
 
         Route::patch('/biodata', [
-            \App\Http\Controllers\Portal\PortalBiodataMahasiswaController::class,
+            PortalBiodataMahasiswaController::class,
             'update',
         ])->name('portal.biodata.update');
-
 
         Route::get(
             '/profil-saya/foto',
@@ -183,52 +185,50 @@ Route::middleware(['auth:web', 'auth.session', 'cache.headers:no_store;private']
             'show',
         ])->name('portal.ktm.show');
 
-        
-                // Profil dosen
+        // Profil dosen
         Route::prefix('dosen/profil-saya')
             ->name('portal.dosen.profil.')
             ->group(function (): void {
 
                 // Menampilkan profil dosen
                 Route::get('/', [
-                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    PortalProfilDosenController::class,
                     'show',
                 ])->name('show');
 
                 // Form edit profil
                 Route::get('/edit', [
-                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    PortalProfilDosenController::class,
                     'edit',
                 ])->name('edit');
 
                 // Menyimpan informasi kontak
                 Route::patch('/', [
-                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    PortalProfilDosenController::class,
                     'update',
                 ])->name('update');
 
                 // Menampilkan foto profil
                 Route::get('/foto', [
-                    \App\Http\Controllers\PortalFotoProfilDosenController::class,
+                    PortalFotoProfilDosenController::class,
                     'show',
                 ])->name('foto');
 
                 // Mengganti foto profil
                 Route::post('/foto', [
-                    \App\Http\Controllers\PortalFotoProfilDosenController::class,
+                    PortalFotoProfilDosenController::class,
                     'update',
                 ])->middleware('throttle:10,1')
                     ->name('foto.update');
 
                 // Mengganti kata sandi
                 Route::patch('/password', [
-                    \App\Http\Controllers\PortalProfilDosenController::class,
+                    PortalProfilDosenController::class,
                     'updatePassword',
                 ])->name('password.update');
-
             });
-            
-             // Kelas & peserta kelas milik dosen
+
+        // Kelas & peserta kelas milik dosen
         Route::prefix('dosen/kelas-saya')
             ->name('portal.dosen.')
             ->group(function (): void {
@@ -418,7 +418,6 @@ Route::prefix('admin')
                 });
             });
 
-
         // Paket Semester
         Route::controller(PaketSemesterController::class)->prefix('paket-semester')->name('paket-semester.')
             ->middleware('can:kelola-paket-semester')
@@ -564,7 +563,7 @@ Route::prefix('admin')
 |--------------------------------------------------------------------------
 */
 Route::prefix('presensi')->name('presensi.')
-    ->middleware([AuthenticatePresensi::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
+    ->middleware([AuthenticatePresensi::class.':web', 'auth.session', 'cache.headers:no_store;private'])
     ->group(function (): void {
         Route::post('/logout', [PortalSessionController::class, 'destroy'])
             ->middleware('throttle:30,1')
@@ -601,7 +600,7 @@ Route::prefix('presensi')->name('presensi.')
 |--------------------------------------------------------------------------
 */
 Route::prefix('berkas')->name('berkas.')
-    ->middleware([AuthenticateBerkas::class . ':web', 'auth.session', 'cache.headers:no_store;private'])
+    ->middleware([AuthenticateBerkas::class.':web', 'auth.session', 'cache.headers:no_store;private'])
     ->group(function (): void {
         Route::post('/logout', [PortalSessionController::class, 'destroy'])
             ->middleware('throttle:30,1')
@@ -626,7 +625,6 @@ Route::prefix('berkas')->name('berkas.')
             });
     });
 
-
 /*
 |--------------------------------------------------------------------------
 | 7. KEGIATAN (tugas, latihan, UTS, UAS)
@@ -634,7 +632,7 @@ Route::prefix('berkas')->name('berkas.')
 */
 Route::prefix('kegiatan')->name('kegiatan.')
     ->middleware([
-        AuthenticateKegiatan::class . ':web',
+        AuthenticateKegiatan::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-kegiatan',
@@ -669,7 +667,7 @@ Route::prefix('kegiatan')->name('kegiatan.')
 */
 Route::prefix('pengumpulan')->name('pengumpulan.')
     ->middleware([
-        AuthenticatePengumpulan::class . ':web',
+        AuthenticatePengumpulan::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-pengumpulan',
@@ -711,7 +709,7 @@ Route::get('/keuangan', [KeuanganDashboardController::class, 'index'])
 // Jenis Biaya
 Route::prefix('keuangan/jenis-biaya')->name('keuangan.jenis-biaya.')
     ->middleware([
-        AuthenticateKeuangan::class . ':web',
+        AuthenticateKeuangan::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-jenis-biaya',
@@ -734,7 +732,7 @@ Route::prefix('keuangan/jenis-biaya')->name('keuangan.jenis-biaya.')
 // Tagihan
 Route::prefix('tagihan')->name('tagihan.')
     ->middleware([
-        AuthenticateKeuangan::class . ':web',
+        AuthenticateKeuangan::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-tagihan',
@@ -758,7 +756,7 @@ Route::prefix('tagihan')->name('tagihan.')
 // Pembayaran
 Route::prefix('pembayaran')->name('pembayaran.')
     ->middleware([
-        AuthenticateKeuangan::class . ':web',
+        AuthenticateKeuangan::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-pembayaran',
@@ -789,7 +787,7 @@ Route::prefix('pembayaran')->name('pembayaran.')
 // Jenis Surat (admin)
 Route::prefix('admin/jenis-surat')->name('admin.jenis-surat.')
     ->middleware([
-        AuthenticateSurat::class . ':web',
+        AuthenticateSurat::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-jenis-surat',
@@ -812,7 +810,7 @@ Route::prefix('admin/jenis-surat')->name('admin.jenis-surat.')
 // Permohonan Surat
 Route::prefix('surat')->name('surat.')
     ->middleware([
-        AuthenticateSurat::class . ':web',
+        AuthenticateSurat::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-surat',
@@ -832,7 +830,7 @@ Route::prefix('surat')->name('surat.')
 // Kalender Akademik
 Route::prefix('kalender-akademik')->name('kalender.')
     ->middleware([
-        AuthenticateSurat::class . ':web',
+        AuthenticateSurat::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-kalender',
@@ -854,7 +852,7 @@ Route::prefix('kalender-akademik')->name('kalender.')
 // Pengumuman
 Route::prefix('pengumuman')->name('pengumuman.')
     ->middleware([
-        AuthenticateSurat::class . ':web',
+        AuthenticateSurat::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-pengumuman',
@@ -876,7 +874,7 @@ Route::prefix('pengumuman')->name('pengumuman.')
 // Notifikasi
 Route::prefix('notifikasi')->name('notifikasi.')
     ->middleware([
-        AuthenticateSurat::class . ':web',
+        AuthenticateSurat::class.':web',
         'auth.session',
         'cache.headers:no_store;private',
         'can:akses-notifikasi',

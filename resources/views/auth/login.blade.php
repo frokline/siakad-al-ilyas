@@ -6,10 +6,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <title>@yield('title', 'Masuk Portal Akademik') | Ilyas Institut</title>
+    <title>SIAKAD ILYAS INSTITUTE - Sistem Informasi Akademik</title>
+
+    <meta name="description"
+        content="SIAKAD ILYAS INSTITUTE adalah portal akademik resmi untuk mahasiswa dan staf. Masuk ke sistem informasi akademik untuk mengakses layanan akademik secara online.">
+
+    <meta name="robots" content="index, follow">
+
+    <link rel="canonical" href="https://siakad.ilyasinstitut.com/">
+
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="SIAKAD ILYAS INSTITUTE - Portal Akademik">
+    <meta property="og:description" content="Portal akademik resmi ILYAS INSTITUTE untuk mahasiswa dan staf.">
+    <meta property="og:url" content="https://siakad.ilyasinstitut.com/">
+    <meta property="og:site_name" content="ILYAS INSTITUTE">
     {{-- Favicon ILYAS INSTITUT --}}
-    <link rel="icon" type="image/png" sizes="512x512"
-        href="{{ asset('images/favicon-rapi.png') }}?v=2">
+    <link rel="icon" type="image/png" sizes="512x512" href="{{ asset('images/favicon-rapi.png') }}?v=2">
 
     <link rel="stylesheet" href="{{ asset('css/login.css') }}">
     <link rel="stylesheet" href="{{ asset('css/login-mobile.css') }}">
@@ -84,8 +96,9 @@
                                 stroke-linecap="round" />
                             <path d="M12 14.5v2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
                         </svg>
-                        <input class="login-input login-input-password" type="password" id="password" name="password"
-                            placeholder="Masukkan kata sandi" maxlength="72" autocomplete="current-password" required
+                        <input class="login-input login-input-password" type="password" id="password"
+                            name="password" placeholder="Masukkan kata sandi" maxlength="72"
+                            autocomplete="current-password" required
                             @error('password')
                                 aria-invalid="true"
                                 aria-describedby="password-error"

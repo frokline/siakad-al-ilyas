@@ -8,10 +8,10 @@ use App\Services\TujuanPortal;
 use Closure;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -21,16 +21,24 @@ final class PortalSessionController extends Controller
 {
     public function home(Request $request, TujuanPortal $tujuan): RedirectResponse
     {
+        // memastikan si user apa sudah  punya sesi login apa belum
         $user = $request->user('web');
 
+        // Apakah isi $user ini sebuah pengguna (User)?" (dijalankan jika jawabannya ya)
         if ($user instanceof User) {
+
+            // "Tanya TujuanPortal (TujuanPortal.php): pengguna ini sebaiknya diarahkan ke halaman (route) mana? Simpan jawabannya di $namaRoute."
             $namaRoute = $tujuan->namaRoute($user);
 
+            // 1. Jika nama route null, sistem melewati blok if dan menjalankan return to_route('login').
             if ($namaRoute !== null) {
+
+                // Perintah ini mengarahkan pengguna ke route berdasarkan nama yang tersimpan di $namaRoute.
                 return to_route($namaRoute);
             }
         }
 
+        // hanya di jalankan jika namaRoute null
         return to_route('login');
     }
 
@@ -45,6 +53,7 @@ final class PortalSessionController extends Controller
                 return to_route($namaRoute);
             }
 
+            // Jika pengguna sudah login, tetapi tujuan route tidak ditemukan
             $this->akhiriSesi($request);
         }
 
@@ -110,8 +119,7 @@ final class PortalSessionController extends Controller
 
         if (! is_string($secretKey) || trim($secretKey) === '') {
             throw ValidationException::withMessages([
-                'turnstile_token' =>
-                'Pemeriksaan keamanan belum dikonfigurasi. Hubungi administrator.',
+                'turnstile_token' => 'Pemeriksaan keamanan belum dikonfigurasi. Hubungi administrator.',
             ]);
         }
 
@@ -128,8 +136,7 @@ final class PortalSessionController extends Controller
                 );
         } catch (ConnectionException $exception) {
             throw ValidationException::withMessages([
-                'turnstile_token' =>
-                'Pemeriksaan keamanan sedang tidak tersedia. Silakan coba lagi.',
+                'turnstile_token' => 'Pemeriksaan keamanan sedang tidak tersedia. Silakan coba lagi.',
             ]);
         }
 
@@ -138,8 +145,7 @@ final class PortalSessionController extends Controller
             || $hasilCaptcha->json('success') !== true
         ) {
             throw ValidationException::withMessages([
-                'turnstile_token' =>
-                'Verifikasi keamanan gagal atau kedaluwarsa. Silakan coba lagi.',
+                'turnstile_token' => 'Verifikasi keamanan gagal atau kedaluwarsa. Silakan coba lagi.',
             ]);
         }
 
@@ -152,7 +158,7 @@ final class PortalSessionController extends Controller
                 'password' => $validated['password'],
                 'status' => User::STATUS_AKTIF,
             ],
-            fn(Authenticatable $user): bool => $user instanceof User
+            fn (Authenticatable $user): bool => $user instanceof User
                 && $tujuan->dapatMasuk($user),
             $request->boolean('remember'),
         );
